@@ -144,16 +144,7 @@ This repo is intentionally split into two layers:
 - Add a release pipeline (tagged builds + plugin distribution artifacts).
 - Add optional containerization for the API (Docker) for easier onboarding.
 
-## Why this is portfolio-worthy
 
-This isn’t a “toy script.” It’s an end-to-end, real workflow system:
-
-- **Performance-aware UX**: designed specifically to avoid vault meltdown at scale.
-- **Clear data ownership**: source data (CSV) vs user edits (SQLite `user_meta`) vs pinned notes (vault).
-- **Local-first**: everything runs on `localhost` by default.
-- **Operational ergonomics**: one-command bootstrap, tests, and helper launchers.
-
-If you want the engineering story: see **[`docs/PORTFOLIO.md`](docs/PORTFOLIO.md)**.
 
 ## Quickstart (recommended): SQLite + API + Obsidian plugin ⭐
 
@@ -226,26 +217,6 @@ Most-used:
 - [Performance & large vault safety](docs/PERFORMANCE.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 
-## Architecture (high level)
-
-```mermaid
-flowchart LR
-    subgraph Obsidian[Obsidian]
-        P["SX Obsidian DB\nCommunity Plugin"]
-        V[Vault\n(_db/media_active/*.md)]
-    end
-
-    subgraph Local[Local machine]
-        API[FastAPI\n(sx_db/api.py)]
-        DB[(SQLite\n(data/sx_obsidian.db))]
-        CSV[(CSV exports)]
-    end
-
-    CSV -->|import-csv| DB
-    P <-->|HTTP localhost| API
-    API <--> DB
-    P -->|pin notes| V
-```
 
 ## Development
 
@@ -262,21 +233,6 @@ This system is designed to be **local-only**.
 - Keep the API bound to `127.0.0.1` unless you *really* mean to expose it.
 - Do not put secrets in `.env` that you wouldn’t want on your machine.
 
-## Media
-
-Add screenshots/GIFs to `docs/assets/` and link them here.
-
-Suggested media to include:
-
-1. Search modal → pin action
-2. Library table with filters
-3. Example pinned note (frontmatter + managed region)
-
-Placeholders:
-
-- `docs/assets/search-modal.png`
-- `docs/assets/library-table.png`
-- `docs/assets/pinned-note.png`
 
 
 

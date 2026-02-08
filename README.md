@@ -1,8 +1,5 @@
 # SX Obsidian DB
 
-> **Repo description (suggested for GitHub):**
-> Local-first SQLite + FastAPI backend + Obsidian plugin for browsing a large SX media library and pinning an active working set into your vault.
-
 [![CI](https://github.com/Jax-Baiya/sx_obsidian/actions/workflows/ci.yml/badge.svg)](https://github.com/Jax-Baiya/sx_obsidian/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10-blue)
 ![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)

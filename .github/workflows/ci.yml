@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Make scripts executable
+        run: |
+          chmod +x deploy.sh run.sh
+
+      - name: Deploy (with dev deps)
+        run: |
+          ./deploy.sh --dev
+
+      - name: Run tests
+        run: |
+          ./.venv/bin/python -m pytest -q

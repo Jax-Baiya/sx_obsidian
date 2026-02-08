@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments (project-local)
+.venv/
+venv/
+ENV/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# Test/coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Type check / lint caches
+.mypy_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Env files
+.env
+.env.local
+.env.*.local
+
+# Local backups
+.env.bak.*
+
+# Local data artifacts
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+
+# Runtime logs (kept local; avoid committing)
+_logs/
+
+# Obsidian plugin build artifacts
+obsidian-plugin/node_modules/
+obsidian-plugin/main.js
+obsidian-plugin/main.js.map
+obsidian-plugin/dist/

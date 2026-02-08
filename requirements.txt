@@ -1,0 +1,12 @@
+pandas
+pyyaml
+tqdm
+python-dotenv
+
+# sx_db (SQLite API + CLI)
+fastapi
+uvicorn
+pydantic
+pydantic-settings
+typer
+rich

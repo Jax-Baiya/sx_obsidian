@@ -1,0 +1,836 @@
+/* Search modal */
+.sxdb-results {
+  margin-top: 8px;
+}
+
+.sxdb-row {
+  display: flex;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  align-items: flex-start;
+}
+
+.sxdb-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.sxdb-left {
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sxdb-id {
+  font-family: var(--font-monospace);
+  opacity: 0.9;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.sxdb-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.sxdb-bm {
+  width: 14px;
+  display: inline-block;
+  color: var(--text-accent);
+}
+
+.sxdb-author {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sxdb-snippet {
+  flex: 1;
+  opacity: 0.9;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+/* Library table view */
+.sxdb-lib-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden; /* prevent double-scroll; tablewrap is the scroller */
+}
+
+.sxdb-lib-header h2 {
+  margin: 0 0 8px 0;
+}
+
+.sxdb-lib-toolbarrow {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.sxdb-lib-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 320px;
+  padding: 6px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  /* Opaque so rows don't show through on transparent themes */
+  background: var(--background-primary);
+}
+
+.sxdb-lib-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  /* Opaque so rows don't show through on transparent themes */
+  background: var(--background-primary);
+}
+
+/* Sheets-like menubar (top row) */
+.sxdb-lib-menubar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  /* Opaque so rows don't show through on transparent themes */
+  background: var(--background-primary);
+  margin: 6px 0 10px 0;
+  position: sticky;
+  top: var(--sxdb-lib-stick-menubar-top, 0px);
+  z-index: 60;
+}
+
+/* Optional: hide the menubar for more screen space */
+.sxdb-menu-hidden .sxdb-lib-menubar {
+  display: none;
+}
+
+.sxdb-lib-toolbarrow {
+  position: sticky;
+  top: var(--sxdb-lib-stick-toolbar-top, 52px); /* below menubar */
+  z-index: 55;
+}
+
+.sxdb-lib-pager {
+  position: sticky;
+  top: var(--sxdb-lib-stick-pager-top, 106px); /* below menubar + toolbar */
+  z-index: 54;
+  background: var(--background-primary);
+  padding-top: 6px;
+}
+
+.sxdb-lib-table thead th {
+  position: sticky;
+  /* Table header sticks inside the scrollable table region (Sheets-like). */
+  top: 0;
+  z-index: 53;
+  background: var(--background-primary);
+}
+
+/* Fallback offsets when the menubar is hidden and JS-based measurement hasn't run yet. */
+.sxdb-menu-hidden {
+  --sxdb-lib-stick-toolbar-top: 0px;
+  --sxdb-lib-stick-pager-top: 54px;
+}
+
+.sxdb-lib-menubar-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sxdb-lib-menubtn {
+  appearance: none;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sxdb-lib-menubtn:hover {
+  background: var(--background-modifier-hover);
+}
+
+.sxdb-lib-menubar-popovers {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 8px;
+  z-index: 50;
+}
+
+.sxdb-lib-controls input[type='text'] {
+  min-width: 160px;
+}
+
+.sxdb-lib-toggle {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.sxdb-lib-toggle select {
+  max-width: min(360px, 70vw);
+  border-radius: 8px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  padding: 4px 8px;
+}
+
+.sxdb-lib-toggle button {
+  border-radius: 8px;
+}
+
+.sxdb-status-box {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 4px 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.sxdb-status-opt {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+/* Library table: per-row Status (multi-choice) */
+.sxdb-statuscell {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sxdb-statuscell-label {
+  font-size: 12px;
+  opacity: 0.92;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.sxdb-statuscell-edit {
+  flex: 0 0 auto;
+  border-radius: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.sxdb-statuseditor {
+  position: fixed;
+  z-index: 120;
+  width: 260px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+
+.sxdb-statuseditor-title {
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+
+.sxdb-statuseditor-sub {
+  font-size: 11px;
+  opacity: 0.8;
+  margin-bottom: 8px;
+}
+
+.sxdb-statuseditor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow: auto;
+  padding: 4px 2px;
+}
+
+.sxdb-statuseditor-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sxdb-statuseditor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* Settings: Fetch tab UX */
+.sxdb-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0 10px 0;
+}
+
+.sxdb-pill {
+  appearance: none;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.sxdb-pill:hover {
+  background: var(--background-modifier-hover);
+}
+
+.sxdb-pill.is-active {
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.sxdb-author-picker {
+  margin: 6px 0 12px 0;
+}
+
+.sxdb-author-picker input[type='text'] {
+  width: 100%;
+  max-width: 520px;
+}
+
+.sxdb-author-list {
+  margin-top: 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-secondary);
+  padding: 10px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.sxdb-author-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.sxdb-author-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 6px 6px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sxdb-author-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.sxdb-author-row input[type='checkbox'] {
+  margin-top: 2px;
+}
+
+/* Settings tabs */
+.sxdb-settings-tabs {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0 12px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding-bottom: 8px;
+}
+
+.sxdb-settings-tab {
+  appearance: none;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.sxdb-settings-tab.is-active {
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.sxdb-settings-panel {
+  display: none;
+}
+
+.sxdb-settings-panel.is-active {
+  display: block;
+}
+
+.sxdb-lib-actions {
+  opacity: 0.8;
+  font-size: 12px;
+}
+
+.sxdb-lib-pager {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 6px 0 10px 0;
+}
+
+.sxdb-lib-pageinfo {
+  opacity: 0.8;
+  font-size: 12px;
+}
+
+.sxdb-lib-tablewrap {
+  /* Sheets-like: the table region is the scroll container. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+}
+
+.sxdb-lib-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.sxdb-lib-table th,
+.sxdb-lib-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  border-right: 1px solid var(--background-modifier-border);
+  vertical-align: top;
+}
+
+.sxdb-lib-table th:last-child,
+.sxdb-lib-table td:last-child {
+  border-right: none;
+}
+
+.sxdb-lib-table th {
+  background: var(--background-primary);
+  z-index: 1;
+  text-align: left;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+/* Freeze panes (sticky columns / first row) */
+.sxdb-lib-table .sxdb-freeze-col,
+.sxdb-lib-table .sxdb-freeze-row {
+  position: sticky;
+  background: var(--background-primary);
+  background-clip: padding-box;
+}
+
+.sxdb-lib-table thead th.sxdb-freeze-col {
+  z-index: 80; /* above header */
+}
+
+.sxdb-lib-table tbody td.sxdb-freeze-col {
+  z-index: 70; /* above body cells */
+}
+
+.sxdb-lib-table tbody td.sxdb-freeze-row {
+  z-index: 75; /* above body cells, below header */
+}
+
+.sxdb-lib-table tbody td.sxdb-freeze-row.sxdb-freeze-col {
+  z-index: 85; /* intersection */
+}
+
+.sxdb-lib-thumb img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+}
+
+.sxdb-lib-thumb {
+  position: relative;
+  width: 64px;
+  min-width: 64px;
+}
+
+.sxdb-lib-hovervideo {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--sxdb-hovervideo-width, 240px);
+  height: var(--sxdb-hovervideo-height, 135px);
+  background: #000;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  z-index: 5;
+}
+
+.sxdb-lib-idbtn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--text-accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-align: left;
+}
+
+.sxdb-lib-idbtn:hover {
+  opacity: 0.9;
+}
+
+.sxdb-col-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+}
+
+.sxdb-lib-caption {
+  max-width: 520px;
+  white-space: normal;
+  overflow: hidden;
+}
+.sxdb-lib-columns {
+  width: min(780px, 90vw);
+  max-height: min(60vh, 520px);
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  background: var(--background-secondary);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+}
+
+.sxdb-lib-viewmenu {
+  width: min(360px, 90vw);
+  max-height: min(60vh, 520px);
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  background: var(--background-secondary);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+}
+
+.sxdb-lib-filtersmenu {
+  width: min(520px, 92vw);
+  max-height: min(60vh, 560px);
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  background: var(--background-secondary);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+}
+
+.sxdb-lib-viewmenu-section {
+  margin-top: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.sxdb-lib-viewmenu-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 6px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.sxdb-lib-viewmenu-row:hover {
+  background: var(--background-modifier-hover);
+}
+.sxdb-lib-columns-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.sxdb-lib-columns-subtitle {
+  margin-bottom: 10px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.sxdb-lib-columns-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.sxdb-lib-colopt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 0;
+  margin-bottom: 0;
+  user-select: none;
+}
+
+.sxdb-lib-colname {
+  min-width: 90px;
+}
+
+.sxdb-lib-columns-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sxdb-lib-id {
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  vertical-align: top;
+}
+
+.sxdb-lib-idcell {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.sxdb-lib-idbtn {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Default: ellipsis overflow */
+[data-sxdb-idwrap='ellipsis'] .sxdb-lib-idbtn {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-sxdb-idwrap='clip'] .sxdb-lib-idbtn {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+[data-sxdb-idwrap='wrap'] .sxdb-lib-idcell {
+  align-items: flex-start;
+}
+
+[data-sxdb-idwrap='wrap'] .sxdb-lib-idbtn {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  word-break: break-all;
+}
+
+.sxdb-lib-idcopy,
+.sxdb-lib-idpeek {
+  appearance: none;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.6;
+  cursor: pointer;
+  opacity: 0.95;
+}
+
+.sxdb-lib-idcopy:hover,
+.sxdb-lib-idpeek:hover {
+  background: var(--background-modifier-hover);
+}
+
+/* Pinned Note Peek window */
+.sxdb-notepeek {
+  position: fixed;
+  z-index: 1000;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  background: var(--background-primary);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+/* When embedding a real Obsidian leaf inside Note Peek, hide the view header to keep it compact. */
+.sxdb-notepeek.sxdb-notepeek-hasleaf .view-header {
+  display: none;
+}
+
+.sxdb-notepeek.sxdb-notepeek-hasleaf .view-content {
+  height: 100%;
+}
+
+.sxdb-notepeek.sxdb-notepeek-hasleaf .sxdb-notepeek-body {
+  /* Let the embedded Obsidian view manage its own scrolling. */
+  padding: 0;
+  overflow: hidden;
+}
+
+.sxdb-notepeek.sxdb-notepeek-hasleaf .workspace-leaf,
+.sxdb-notepeek.sxdb-notepeek-hasleaf .workspace-leaf-content {
+  height: 100%;
+}
+
+/* Ctrl/Cmd-hover markdown preview popover (custom) */
+.sxdb-hovermd {
+  position: fixed;
+  z-index: 950;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  background: var(--background-primary);
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.42);
+  overflow: hidden;
+}
+
+.sxdb-hovermd-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  user-select: none;
+}
+
+.sxdb-hovermd-title {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.9;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sxdb-hovermd-btns {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.sxdb-hovermd-btns button {
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.sxdb-hovermd-body {
+  height: calc(100% - 38px);
+  overflow: auto;
+  padding: 10px 12px;
+}
+
+.sxdb-notepeek-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  cursor: grab;
+  user-select: none;
+}
+
+.sxdb-notepeek-title {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.9;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sxdb-notepeek-btns {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.sxdb-notepeek-btns button {
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.sxdb-notepeek-body {
+  height: calc(100% - 38px);
+  overflow: auto;
+  padding: 10px 12px;
+}
+
+.sxdb-notepeek-resizer {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, rgba(255, 255, 255, 0.18) 50%);
+}
+
+.sxdb-lib-actions-cell {
+  display: flex;
+  gap: 6px;
+}
+
+.sxdb-lib-actions-cell button.sxdb-pin-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+.sxdb-lib-actions-cell button.sxdb-pin-active:hover {
+  filter: brightness(1.05);
+}

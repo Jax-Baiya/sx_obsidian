@@ -29,6 +29,10 @@ By default, `import-csv` reads these from `.env`:
 - `export OBSIDIAN_VAULT_PATH=/mnt/t/AlexNova`
 - `make plugin-install`
 
+Or use the helper launcher (wraps the same Make targets):
+
+- `./sxctl.sh plugin update`
+
 Enable the plugin in Obsidian:
 - Settings → Community plugins → Enable “SX Obsidian DB”
 
@@ -52,3 +56,9 @@ Settings → Community plugins → SX Obsidian DB:
 
 - Keep the database and logs outside the vault.
 - If your vault won’t open due to `_db/media`, see `docs/PERFORMANCE.md`.
+
+## Next reading
+
+- [Usage Guide](USAGE.md)
+- [API Architecture](API_ARCHITECTURE.md)
+- [Portfolio / case study](PORTFOLIO.md)

@@ -32,10 +32,12 @@ This document explains how the **Obsidian plugin** communicates with the **SQLit
 │  • GET /health     → {"ok": true}                               │
 │  • GET /stats      → item counts, FTS status                    │
 │  • GET /search     → FTS5 + LIKE fallback search                │
+│  • GET /authors    → author aggregation + filters               │
 │  • GET /items       → paged list for table/grid UI              │
 │  • GET /items/{id}  → raw item data as JSON                     │
 │  • GET /items/{id}/note → rendered markdown note                │
 │  • GET/PUT /items/{id}/meta → user-editable columns             │
+│  • GET /notes      → paged list of notes (for sync workflows)   │
 │  • GET /media/cover/{id} → cover/thumbnail bytes                │
 │  • GET /media/video/{id} → video bytes (supports Range)         │
 └──────────────────────┬──────────────────────────────────────────┘
@@ -139,10 +141,30 @@ PLUGIN                     API                        DATABASE
 **`/items`:**
 
 - `q` (string): Substring filter (LIKE)
-- `limit` (int, default 50, max 200): Page size
+- `caption_q` (string): Caption-only filter (supports simple advanced syntax)
+- `limit` (int, default 50, max 2000): Page size
 - `offset` (int, default 0): Page offset
 - `bookmarked_only` (bool, default false): Filter to bookmarked rows
-- `order` (`recent` or `bookmarked`): Sort order
+- `bookmark_from` / `bookmark_to` (YYYY-MM-DD): Bookmark timestamp window
+- `author_unique_id` (csv list): Filter by author unique id
+- `author_id` (csv list): Filter by raw author id
+- `status` (csv list): Filter by user-owned status (supports blank for unassigned)
+- `rating_min` / `rating_max` (0..5): Filter by rating
+- `tag` (csv list): Filter by tags (comma-separated tags stored in user meta)
+- `has_notes` (bool): Filter by whether user notes exist
+- `order` (`recent|bookmarked|author|status|rating`): Sort order
+
+### `caption_q` advanced syntax
+
+The caption-only filter accepts a simple “power user” syntax:
+
+- Quoted phrases: `"long phrase"`
+- Exclusions: `-term` (exclude captions containing `term`)
+
+Examples:
+
+- `"morning routine" -ad`
+- `nike -"paid partnership"`
 
 ---
 
@@ -151,6 +173,10 @@ PLUGIN                     API                        DATABASE
 1. Plugin view requests a page of items:
 
 - `GET /items?q=...&limit=...&offset=...&bookmarked_only=...`
+
+For caption-only searching (without affecting author/id):
+
+- `GET /items?caption_q=...&limit=...&offset=...`
 
 2. For each row, the plugin may:
 

@@ -1,5 +1,7 @@
 # Usage Guide
 
+If you’re new here, start with the project overview in `../README.md`, then come back for the hands-on steps below.
+
 This project supports **two ways** to work with your SchedulerX exports:
 
 1. **Generator (file sync)** — creates/updates Markdown notes in your vault from CSVs.
@@ -94,6 +96,8 @@ And for plugin updates:
 export OBSIDIAN_VAULT_PATH=/mnt/t/AlexNova
 ./sxctl.sh plugin update
 ```
+
+Tip: the `Makefile` wraps the same flow (`make api-init`, `make api-import`, `make api-serve`, `make plugin-build`, `make plugin-install`).
 
 The plugin does **not** need to be “launched” each time.
 

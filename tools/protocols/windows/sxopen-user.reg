@@ -1,0 +1,30 @@
+Windows Registry Editor Version 5.00
+
+; sxopen protocol
+[HKEY_CURRENT_USER\Software\Classes\sxopen]
+@="URL:sxopen Protocol"
+"URL Protocol"=""
+
+[HKEY_CURRENT_USER\Software\Classes\sxopen\shell]
+
+[HKEY_CURRENT_USER\Software\Classes\sxopen\shell\open]
+
+[HKEY_CURRENT_USER\Software\Classes\sxopen\shell\open\command]
+; IMPORTANT: Update this path to where YOU placed sxopen.vbs on Windows.
+; Recommended: keep the whole folder together (sxopen.vbs + sxopen.ps1) in a stable location.
+; Example:
+;   T:\AlexNova\sx_tools\sxopen.vbs
+@="wscript.exe \"T:\\AlexNova\\sx_tools\\sxopen.vbs\" \"%1\""
+
+; sxreveal protocol
+[HKEY_CURRENT_USER\Software\Classes\sxreveal]
+@="URL:sxreveal Protocol"
+"URL Protocol"=""
+
+[HKEY_CURRENT_USER\Software\Classes\sxreveal\shell]
+
+[HKEY_CURRENT_USER\Software\Classes\sxreveal\shell\open]
+
+[HKEY_CURRENT_USER\Software\Classes\sxreveal\shell\open\command]
+; IMPORTANT: Update this path to where YOU placed sxopen.vbs on Windows.
+@="wscript.exe \"T:\\AlexNova\\sx_tools\\sxopen.vbs\" \"%1\""

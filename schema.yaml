@@ -1,0 +1,32 @@
+# Schema mapping configuration for SX Obsidian DB Layer Generator
+
+# Mappings for consolidated.csv (main source)
+consolidated:
+  id: c_videos_id
+  author_id: c_videos_authorid
+  text_content: c_texts_text_content
+  unique_id: c_authors_uniqueids
+  nickname: c_authors_nicknames
+
+# Mappings for authors.csv (join source)
+authors:
+  id: authors_id
+  nickname: authors_nicknames
+  unique_id: authors_uniqueids
+  followers: authors_followercount
+  hearts: authors_heartcount
+  videos: authors_videocount
+  signature: authors_signature
+  is_private: authors_privateaccount
+
+# Mappings for bookmarks.csv (join source)
+bookmarks:
+  id: bookmarks_bookmark_id
+  type: bookmarks_list_type
+  timestamp: bookmarks_timestamp
+
+# File discovery settings
+media:
+  video_exts: [".mp4", ".mov", ".mkv"]
+  cover_exts: [".jpg", ".jpeg", ".png", ".webp"]
+  ignore_folders: [".appdata", ".git", "_logs", "_db", "Avatars"]

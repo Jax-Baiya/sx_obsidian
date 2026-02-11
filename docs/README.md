@@ -8,6 +8,7 @@ If you’re viewing this on GitHub, start with the project overview in [`../READ
 
 - **Setup + workflows**: [`USAGE.md`](USAGE.md)
 - **SQLite + plugin workflow**: [`PLUGIN_DB.md`](PLUGIN_DB.md)
+- **Migrate to the Active-only vault strategy**: [`MIGRATION_ACTIVE_ONLY.md`](MIGRATION_ACTIVE_ONLY.md)
 - **Environment configuration**: [`ENVIRONMENT.md`](ENVIRONMENT.md)
 - **Profiles**: [`PROFILES.md`](PROFILES.md)
 

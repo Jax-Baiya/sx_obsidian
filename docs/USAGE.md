@@ -125,7 +125,7 @@ export OBSIDIAN_VAULT_PATH=/mnt/t/AlexNova
 
 To pull Markdown notes from SQLite into your vault (DB → vault):
 
-- Settings → Plugin → **SX Obsidian DB** → **Sync** tab → **DB → vault: fetch bookmarked notes**
+- Settings → Community plugins → **SX Obsidian DB** → **Fetch** tab → configure filters → run **Fetch notes (DB → vault)**
 - Or: Command palette → **SX: Open library table** → apply filters → **Sync selection → vault**
 
 See also: [SQLite DB + Plugin](PLUGIN_DB.md)

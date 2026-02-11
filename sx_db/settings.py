@@ -27,6 +27,14 @@ class Settings(BaseSettings):
     SX_API_PORT: int = Field(default=8123)
     SX_API_CORS_ALLOW_ALL: bool = Field(default=True)
 
+    # API logging (diagnostic; stored outside vault)
+    SX_API_LOG_DIR: Path = Field(default=Path("_logs"))
+    SX_API_LOG_LEVEL: str = Field(default="INFO")
+    # If enabled, logs every request (can be noisy with the Obsidian plugin).
+    SX_API_LOG_ACCESS: bool = Field(default=False)
+    # Timed rotation retention count (days). Old log files are auto-deleted.
+    SX_API_LOG_BACKUP_COUNT: int = Field(default=14)
+
     # Import sources
     # Match existing generator conventions (these keys already exist in the repo's .env)
     CSV_consolidated_1: str | None = Field(default=None)

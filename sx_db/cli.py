@@ -523,20 +523,33 @@ def run(
 ):
     """Start the FastAPI server for the Obsidian plugin."""
     import uvicorn
+
+    from .logging import setup_api_logging
     
     s = load_settings()
     host = host or s.SX_API_HOST
     port = port or s.SX_API_PORT
+
+    # Enable bounded diagnostic logs (rotating file, auto-deletes older files).
+    log_file = setup_api_logging(s)
     
     console.print(Panel.fit(
         f"[bold]API Server starting...[/bold]\n\n"
         f"  URL:  [cyan]http://{host}:{port}[/cyan]\n"
         f"  Docs: [cyan]http://{host}:{port}/docs[/cyan]\n\n"
+        f"  Logs: [cyan]{log_file}[/cyan]\n\n"
         f"[dim]Press CTRL+C to stop[/dim]",
         title="[bold green]sx_db API[/bold green]"
     ))
     
-    uvicorn.run("sx_db.app:app", host=host, port=port, reload=False)
+    uvicorn.run(
+        "sx_db.app:app",
+        host=host,
+        port=port,
+        reload=False,
+        access_log=bool(getattr(s, "SX_API_LOG_ACCESS", False)),
+        log_config=None,
+    )
 
 
 @app.command("setup", help="[bold cyan]Q[/bold cyan]uickstart wizard for first-time setup")

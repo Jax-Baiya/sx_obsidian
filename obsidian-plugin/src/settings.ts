@@ -36,6 +36,12 @@ export interface SxDbSettings {
   // Autosave: when a user edits a note in the vault, automatically push it back to the DB.
   autoPushOnEdit: boolean;
   autoPushDebounceMs: number;
+  /**
+   * Compatibility option for migrations.
+   * If true, auto-push also triggers for legacy split folders (bookmarks/authors) even when
+   * vaultWriteStrategy is set to active-only.
+   */
+  autoPushLegacyFoldersInActiveOnly: boolean;
 
   // SX Library view UX
   libraryHoverVideoPreview: boolean;
@@ -118,6 +124,7 @@ export const DEFAULT_SETTINGS: SxDbSettings = {
 
   autoPushOnEdit: true,
   autoPushDebounceMs: 1200,
+  autoPushLegacyFoldersInActiveOnly: true,
 
   libraryHoverVideoPreview: true,
   // Default: unmuted (requested), but note some systems may still block autoplay with sound.
@@ -800,13 +807,27 @@ export class SxDbSettingTab extends PluginSettingTab {
       new Setting(el)
         .setName('Auto-push edits to DB')
         .setDesc(
-          'When enabled, edits you make to notes under your active notes folder are automatically pushed to SQLite (vault → DB), creating a backup that survives template re-syncs. (Split mode also auto-pushes legacy bookmarks/authors folders.)'
+          'When enabled, edits you make to notes under _db folders are automatically pushed to SQLite (vault → DB), creating a backup that survives template re-syncs.'
         )
         .addToggle((toggle) =>
           toggle.setValue(Boolean(this.plugin.settings.autoPushOnEdit)).onChange(async (value) => {
             this.plugin.settings.autoPushOnEdit = value;
             await this.plugin.saveSettings();
           })
+        );
+
+      new Setting(el)
+        .setName('Auto-push legacy folders in Active-only mode')
+        .setDesc(
+          'When Vault write strategy is Active-only, also auto-push edits made in legacy split folders (_db/bookmarks, _db/authors). Disable if you want strict canonical edits only.'
+        )
+        .addToggle((toggle) =>
+          toggle
+            .setValue(Boolean(this.plugin.settings.autoPushLegacyFoldersInActiveOnly))
+            .onChange(async (value) => {
+              this.plugin.settings.autoPushLegacyFoldersInActiveOnly = value;
+              await this.plugin.saveSettings();
+            })
         );
 
       new Setting(el)
@@ -933,6 +954,12 @@ export class SxDbSettingTab extends PluginSettingTab {
         .addButton((btn) =>
           btn.setButtonText('Copy: sxctl api serve').setCta().onClick(async () => {
             const ok = await copyToClipboard('./sxctl.sh api serve');
+            new Notice(ok ? 'Copied.' : 'Copy failed (clipboard permissions).');
+          })
+        )
+        .addButton((btn) =>
+          btn.setButtonText('Copy: sxctl api serve-bg').onClick(async () => {
+            const ok = await copyToClipboard('./sxctl.sh api serve-bg');
             new Notice(ok ? 'Copied.' : 'Copy failed (clipboard permissions).');
           })
         )

@@ -502,14 +502,13 @@ export default class SxDbPlugin extends Plugin {
         if (!folderClass) return;
 
         const strategy = String(this.settings.vaultWriteStrategy || 'split');
-        if (strategy === 'active-only' && folderClass === 'legacy') {
-          // Avoid surprising background writes from legacy folders when the vault strategy is active-only.
-          // Warn once per file path per session to keep it quiet.
+        if (strategy === 'active-only' && folderClass === 'legacy' && !this.settings.autoPushLegacyFoldersInActiveOnly) {
+          // Strict mode: skip legacy folders. Warn once per file path per session to keep it quiet.
           const p = normalizePath(af.path);
           if (!this._autoPushLegacyWarned.has(p)) {
             this._autoPushLegacyWarned.add(p);
             new Notice(
-              'Auto-push skipped: you edited a legacy _db note (bookmarks/authors) while “Vault write strategy” is Active-only. Use the Consolidate command (or switch to Split) if you want edits here pushed to SQLite.'
+              'Auto-push skipped: legacy _db note edited while “Vault write strategy” is Active-only. Enable “Auto-push legacy folders in Active-only mode”, or run Consolidate.'
             );
           }
           return;

@@ -800,7 +800,7 @@ export class SxDbSettingTab extends PluginSettingTab {
       new Setting(el)
         .setName('Auto-push edits to DB')
         .setDesc(
-          'When enabled, any edits you make to notes under _db folders are automatically pushed to SQLite (vault → DB), creating a backup that survives template re-syncs.'
+          'When enabled, edits you make to notes under your active notes folder are automatically pushed to SQLite (vault → DB), creating a backup that survives template re-syncs. (Split mode also auto-pushes legacy bookmarks/authors folders.)'
         )
         .addToggle((toggle) =>
           toggle.setValue(Boolean(this.plugin.settings.autoPushOnEdit)).onChange(async (value) => {

@@ -162,6 +162,7 @@ export default class SxDbPlugin extends Plugin {
 
   private _recentWrites: Map<string, number> = new Map();
   private _autoPushTimers: Map<string, number> = new Map();
+  private _autoPushLegacyWarned: Set<string> = new Set();
 
   markRecentlyWritten(path: string): void {
     const p = normalizePath(path);
@@ -175,14 +176,19 @@ export default class SxDbPlugin extends Plugin {
     return Date.now() - ts < 2500;
   }
 
-  private isUnderDbFolders(filePath: string): boolean {
+  private classifyDbFolder(filePath: string): 'active' | 'legacy' | null {
     const p = normalizePath(filePath);
-    const roots = [
-      normalizePath(this.settings.activeNotesDir),
-      normalizePath(this.settings.bookmarksNotesDir),
-      normalizePath(this.settings.authorsNotesDir)
-    ];
-    return roots.some((r) => r && (p === r || p.startsWith(r + '/')));
+
+    const activeRoot = normalizePath(this.settings.activeNotesDir);
+    if (activeRoot && (p === activeRoot || p.startsWith(activeRoot + '/'))) return 'active';
+
+    const bookmarksRoot = normalizePath(this.settings.bookmarksNotesDir);
+    if (bookmarksRoot && (p === bookmarksRoot || p.startsWith(bookmarksRoot + '/'))) return 'legacy';
+
+    const authorsRoot = normalizePath(this.settings.authorsNotesDir);
+    if (authorsRoot && (p === authorsRoot || p.startsWith(authorsRoot + '/'))) return 'legacy';
+
+    return null;
   }
 
   private async autoPushFile(file: TFile): Promise<void> {
@@ -491,7 +497,24 @@ export default class SxDbPlugin extends Plugin {
         if (!this.settings.autoPushOnEdit) return;
         if (!(af instanceof TFile)) return;
         if (af.extension !== 'md') return;
-        if (!this.isUnderDbFolders(af.path)) return;
+
+        const folderClass = this.classifyDbFolder(af.path);
+        if (!folderClass) return;
+
+        const strategy = String(this.settings.vaultWriteStrategy || 'split');
+        if (strategy === 'active-only' && folderClass === 'legacy') {
+          // Avoid surprising background writes from legacy folders when the vault strategy is active-only.
+          // Warn once per file path per session to keep it quiet.
+          const p = normalizePath(af.path);
+          if (!this._autoPushLegacyWarned.has(p)) {
+            this._autoPushLegacyWarned.add(p);
+            new Notice(
+              'Auto-push skipped: you edited a legacy _db note (bookmarks/authors) while “Vault write strategy” is Active-only. Use the Consolidate command (or switch to Split) if you want edits here pushed to SQLite.'
+            );
+          }
+          return;
+        }
+
         if (this.isRecentlyWritten(af.path)) return;
 
         const key = normalizePath(af.path);

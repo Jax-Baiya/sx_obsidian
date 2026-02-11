@@ -28,6 +28,9 @@ htmlcov/
 Thumbs.db
 .vscode/
 
+# Windows download metadata (often appears in WSL repos)
+*:Zone.Identifier
+
 # Env files
 .env
 .env.local

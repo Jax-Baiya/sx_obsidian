@@ -15,6 +15,15 @@ These define the relative locations inside any vault:
 
 - `ARCHIVE_DIR`: Where to move archived DB notes when using `--archive-stale` (default: `_archive/sx_obsidian_db`, stored next to the project unless absolute).
 
+### API (sx_db) diagnostic logs
+
+The FastAPI server can write a small rotating log file for diagnostics.
+
+- `SX_API_LOG_DIR`: Log directory for the API (default: `_logs`, relative to the repo root)
+- `SX_API_LOG_LEVEL`: Log level (default: `INFO`)
+- `SX_API_LOG_ACCESS`: If set to `1`/`true`, include request access logs (can be noisy)
+- `SX_API_LOG_BACKUP_COUNT`: How many rotated daily log files to keep (default: `14`)
+
 ### Profile Namespacing
 Profiles allow you to define multiple distinct configurations. 
 

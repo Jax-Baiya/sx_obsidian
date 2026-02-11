@@ -33,6 +33,21 @@ The script searches `data/` recursively. If your images are elsewhere, use the `
 
 ## Backend server ops (Linux)
 
+### Run the API in the background (sxctl quick method)
+
+If you just want the server to run in the background quickly (without systemd):
+
+```bash
+./sxctl.sh api serve-bg
+./sxctl.sh api server-status
+./sxctl.sh api stop
+```
+
+Logs are written to a rotating diagnostic file:
+
+- `_logs/sx_db_api.log` (daily rotation)
+- Old rotated logs are auto-deleted (see `SX_API_LOG_BACKUP_COUNT` in `.env`)
+
 ### Run the API in the background (systemd --user)
 
 If you want the FastAPI server to keep running after you close your terminal, a user-level systemd service is the most reliable option.
@@ -62,7 +77,9 @@ systemctl --user status sx-db
 
 ### Prune cached logs
 
-This repo includes a lightweight maintenance worker you can run manually or via cron/systemd timers:
+The API server writes rotating logs and auto-deletes older rotated files.
+
+If you also want an explicit cleanup tool (useful for other log folders), this repo includes a lightweight maintenance worker you can run manually or via cron/systemd timers:
 
 ```bash
 python -m sx_db.workers.prune_logs _logs --max-age-days 14

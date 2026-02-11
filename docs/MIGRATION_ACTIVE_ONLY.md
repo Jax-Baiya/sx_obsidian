@@ -56,8 +56,8 @@ If you had custom manual edits, consolidation uses the same “preserve user edi
 
 If **Auto-push edits to DB** is enabled:
 
-- In **Active-only** mode, the plugin auto-pushes edits for notes under the Active notes folder.
-- Edits made directly in legacy `_db/bookmarks/` or `_db/authors/` are treated as legacy and won’t be auto-pushed (a one-time warning is shown per file).
+- In **Active-only** mode, the plugin will *still* auto-push edits from legacy `_db/bookmarks/` and `_db/authors/…` folders by default (compatibility during migration).
+- If you want strict canonical behavior, disable: **Auto-push legacy folders in Active-only mode**.
 
 If you want legacy folders to remain first-class, switch **Vault write strategy** back to **Split**.
 

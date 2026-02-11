@@ -15,6 +15,9 @@ help() {
 Usage:
   ./sxctl.sh menu
   ./sxctl.sh api serve
+  ./sxctl.sh api serve-bg
+  ./sxctl.sh api stop
+  ./sxctl.sh api server-status
   ./sxctl.sh api init
   ./sxctl.sh api import
   ./sxctl.sh plugin update
@@ -132,6 +135,61 @@ case "$cmd" in
     ensure_venv
     case "$sub" in
       serve|run|server) make api-serve ;;
+      serve-bg|bg|background)
+        mkdir -p "./_logs"
+        pidfile="./_logs/sx_db_api.pid"
+        out="./_logs/sx_db_api.nohup.out"
+
+        if [ -f "$pidfile" ]; then
+          pid="$(cat "$pidfile" 2>/dev/null || true)"
+          if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            say "API already running (pid=$pid)."
+            say "Logs: ./_logs/sx_db_api.log (rotating)"
+            exit 0
+          fi
+          rm -f "$pidfile" || true
+        fi
+
+        nohup ./.venv/bin/python -m sx_db run >"$out" 2>&1 &
+        pid="$!"
+        echo "$pid" >"$pidfile"
+        say "API started in background (pid=$pid)."
+        say "Logs: ./_logs/sx_db_api.log (rotating)"
+        say "(stdout/stderr fallback: $out)"
+        ;;
+      stop)
+        pidfile="./_logs/sx_db_api.pid"
+        if [ ! -f "$pidfile" ]; then
+          say "No pidfile found ($pidfile). Is the API running?"
+          exit 0
+        fi
+        pid="$(cat "$pidfile" 2>/dev/null || true)"
+        if [ -z "$pid" ]; then
+          rm -f "$pidfile" || true
+          say "No pid in pidfile. Removed $pidfile."
+          exit 0
+        fi
+        if kill -0 "$pid" 2>/dev/null; then
+          say "Stopping API (pid=$pid)…"
+          kill "$pid" 2>/dev/null || true
+        fi
+        rm -f "$pidfile" || true
+        say "Stopped (or already not running)."
+        ;;
+      server-status)
+        pidfile="./_logs/sx_db_api.pid"
+        if [ ! -f "$pidfile" ]; then
+          say "API not running (no pidfile)."
+          exit 0
+        fi
+        pid="$(cat "$pidfile" 2>/dev/null || true)"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+          say "API running (pid=$pid)."
+          say "Logs: ./_logs/sx_db_api.log (rotating)"
+        else
+          say "API not running (stale pidfile)."
+        fi
+        ;;
       init) make api-init ;;
       import) make api-import ;;
       status|stats)

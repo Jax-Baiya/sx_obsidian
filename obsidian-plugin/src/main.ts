@@ -2,6 +2,7 @@ import { App, Modal, Notice, Plugin, requestUrl, TFile, normalizePath, parseYaml
 import { DEFAULT_SETTINGS, SxDbSettingTab, type SxDbSettings } from './settings';
 import { LibraryView, SXDB_LIBRARY_VIEW } from './libraryView';
 import {
+  sxConsolidateLegacyNotesToActiveDir,
   sxFetchNotes,
   sxOpenApiDocs,
   sxPinById,
@@ -383,6 +384,14 @@ export default class SxDbPlugin extends Plugin {
       name: 'SX: Push notes (vault → DB) from _db folders',
       callback: async () => {
         await sxPushNotes(this);
+      }
+    });
+
+    this.addCommand({
+      id: 'sxdb-consolidate-legacy-notes',
+      name: 'SX: Consolidate legacy notes → active folder (dedupe)',
+      callback: async () => {
+        await sxConsolidateLegacyNotesToActiveDir(this);
       }
     });
 

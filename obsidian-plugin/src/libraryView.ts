@@ -1592,6 +1592,7 @@ export class LibraryView extends ItemView {
     const batch = Math.max(10, this.plugin.settings.syncBatchSize ?? 200);
     const maxItems = Math.max(0, this.plugin.settings.syncMaxItems ?? 2000);
     const replace = Boolean(this.plugin.settings.syncReplaceOnPull);
+    const strategy = String(this.plugin.settings.vaultWriteStrategy || 'split');
 
     const baseParams: string[] = [];
     baseParams.push(`q=${encodeURIComponent(this.q)}`);
@@ -1615,7 +1616,9 @@ export class LibraryView extends ItemView {
     // Optional replacement: only safe when we know we will write into a single destination folder.
     if (replace) {
       try {
-        if (this.bookmarkedOnly) {
+        if (strategy === 'active-only') {
+          new Notice('Replace-on-pull is ignored for active-only strategy (to avoid deleting canonical notes).');
+        } else if (this.bookmarkedOnly) {
           const destDir = normalizePath(this.plugin.settings.bookmarksNotesDir);
           await this.ensureFolder(destDir);
           const deleted = await this.clearFolderMarkdown(destDir);
@@ -1650,14 +1653,18 @@ export class LibraryView extends ItemView {
         const md = n.markdown;
         if (!md) continue;
 
+        const activeDir = normalizePath(this.plugin.settings.activeNotesDir);
         const bookmarksDir = normalizePath(this.plugin.settings.bookmarksNotesDir);
         const authorDir = normalizePath(
           `${this.plugin.settings.authorsNotesDir}/${this.slugFolderName(String(n.author_unique_id ?? n.author_name ?? 'unknown'))}`
         );
 
-        // If bookmarked, write into both bookmarks + authors folders.
-        // This mirrors the DB dimension split (bookmarks vs author groupings).
-        const destDirs = n.bookmarked ? [bookmarksDir, authorDir] : [authorDir];
+        const destDirs =
+          strategy === 'active-only'
+            ? [activeDir]
+            : n.bookmarked
+              ? [bookmarksDir, authorDir]
+              : [authorDir];
 
         for (const destDir of destDirs) {
           const targetPath = normalizePath(`${destDir}/${id}.md`);

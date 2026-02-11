@@ -6,6 +6,10 @@ export interface SxDbSettings {
   activeNotesDir: string;
   bookmarksNotesDir: string;
   authorsNotesDir: string;
+  // Where pull/sync operations write markdown notes.
+  // - active-only: always write to activeNotesDir (recommended)
+  // - split: legacy behavior (bookmarks + authors folders)
+  vaultWriteStrategy: 'active-only' | 'split';
   syncBatchSize: number;
   syncMaxItems: number;
   syncReplaceOnPull: boolean;
@@ -90,6 +94,7 @@ export const DEFAULT_SETTINGS: SxDbSettings = {
   activeNotesDir: '_db/media_active',
   bookmarksNotesDir: '_db/bookmarks',
   authorsNotesDir: '_db/authors',
+  vaultWriteStrategy: 'active-only',
   syncBatchSize: 200,
   syncMaxItems: 2000,
   syncReplaceOnPull: false,
@@ -531,13 +536,14 @@ export class SxDbSettingTab extends PluginSettingTab {
       // Fetch action
       new Setting(el)
         .setName('DB → vault: fetch notes')
-        .setDesc('Fetches notes from the API and writes them into your configured _db folders.')
+        .setDesc('Fetches notes from the API and writes them into your vault (destination depends on Vault write strategy).')
         .addButton((btn) =>
           btn.setButtonText('Fetch now').setCta().onClick(async () => {
             const baseUrl = this.plugin.settings.apiBaseUrl.replace(/\/$/, '');
             const batch = Math.max(10, this.plugin.settings.syncBatchSize ?? 200);
             const maxItems = Math.max(0, this.plugin.settings.syncMaxItems ?? 2000);
             const replace = Boolean(this.plugin.settings.syncReplaceOnPull);
+            const strategy = String(this.plugin.settings.vaultWriteStrategy || 'split');
 
             const q = (this.plugin.settings.fetchQuery || '').trim();
             const statuses = Array.isArray(this.plugin.settings.fetchStatuses) ? this.plugin.settings.fetchStatuses : [];
@@ -556,11 +562,13 @@ export class SxDbSettingTab extends PluginSettingTab {
             try {
               // Replacement behavior (safe subsets only)
               if (replace) {
-                if (mode === 'bookmarks') {
+                if (strategy === 'split' && mode === 'bookmarks') {
                   const destDir = normalizePath(this.plugin.settings.bookmarksNotesDir);
                   await ensureFolder(this.app, destDir);
                   const deleted = await clearMarkdownInFolder(this.app, destDir);
                   if (deleted) new Notice(`Cleared ${deleted} note(s) from ${destDir} before fetch.`);
+                } else if (strategy !== 'split') {
+                  new Notice('Replace-on-pull is ignored for active-only strategy (to avoid deleting canonical notes).');
                 }
               }
 
@@ -622,15 +630,18 @@ export class SxDbSettingTab extends PluginSettingTab {
                     `${this.plugin.settings.authorsNotesDir}/${slugFolderName(String(n.author_unique_id ?? n.author_name ?? 'unknown'))}`
                   );
                   const bookmarksDir = normalizePath(this.plugin.settings.bookmarksNotesDir);
+                  const activeDir = normalizePath(this.plugin.settings.activeNotesDir);
 
                   const destDirs: string[] =
-                    mode === 'bookmarks'
-                      ? [bookmarksDir]
-                      : mode === 'authors'
-                        ? [authorDir]
-                        : isBm
-                          ? [bookmarksDir, authorDir]
-                          : [authorDir];
+                    strategy === 'active-only'
+                      ? [activeDir]
+                      : mode === 'bookmarks'
+                        ? [bookmarksDir]
+                        : mode === 'authors'
+                          ? [authorDir]
+                          : isBm
+                            ? [bookmarksDir, authorDir]
+                            : [authorDir];
 
                   for (const destDir of destDirs) {
                     await ensureFolder(this.app, destDir);
@@ -666,7 +677,7 @@ export class SxDbSettingTab extends PluginSettingTab {
 
       new Setting(el)
         .setName('Active notes folder')
-        .setDesc('Where to create/update pinned notes (relative to vault root).')
+        .setDesc('Canonical destination for pinned notes (relative to vault root).')
         .addText((text) =>
           text
             .setPlaceholder('_db/media_active')
@@ -678,8 +689,24 @@ export class SxDbSettingTab extends PluginSettingTab {
         );
 
       new Setting(el)
+        .setName('Vault write strategy')
+        .setDesc(
+          'Controls where DB → vault operations write note files. “Active-only” prevents duplicates by writing everything into the Active notes folder.'
+        )
+        .addDropdown((dd) =>
+          dd
+            .addOption('active-only', 'Active-only (recommended)')
+            .addOption('split', 'Split (legacy: bookmarks + authors)')
+            .setValue(String(this.plugin.settings.vaultWriteStrategy || 'split'))
+            .onChange(async (value) => {
+              this.plugin.settings.vaultWriteStrategy = value === 'active-only' ? 'active-only' : 'split';
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(el)
         .setName('Bookmarks notes folder')
-        .setDesc('Destination for bookmarked items when syncing (relative to vault root).')
+        .setDesc('Legacy split strategy only: destination for bookmarked items (relative to vault root).')
         .addText((text) =>
           text
             .setPlaceholder('_db/bookmarks')
@@ -692,7 +719,7 @@ export class SxDbSettingTab extends PluginSettingTab {
 
       new Setting(el)
         .setName('Authors notes folder')
-        .setDesc('Destination base folder for non-bookmarked items when syncing. Files go into _db/authors/<author>/ID.md')
+        .setDesc('Legacy split strategy only: destination base folder for author-grouped notes. Files go into _db/authors/<author>/ID.md')
         .addText((text) =>
           text
             .setPlaceholder('_db/authors')
@@ -701,6 +728,19 @@ export class SxDbSettingTab extends PluginSettingTab {
               this.plugin.settings.authorsNotesDir = value.trim() || DEFAULT_SETTINGS.authorsNotesDir;
               await this.plugin.saveSettings();
             })
+        );
+
+      new Setting(el)
+        .setName('Consolidate legacy folders (dedupe)')
+        .setDesc('Moves/merges notes from legacy Bookmarks/Authors folders into the Active notes folder, archiving duplicates for safety.')
+        .addButton((btn) =>
+          btn.setButtonText('Consolidate now').onClick(async () => {
+            try {
+              await (this.app as any).commands?.executeCommandById?.('sxdb-consolidate-legacy-notes');
+            } catch {
+              new Notice('Consolidation command is unavailable. Please reload the plugin.');
+            }
+          })
         );
 
       new Setting(el)
@@ -786,14 +826,21 @@ export class SxDbSettingTab extends PluginSettingTab {
 
       new Setting(el)
         .setName('Vault → DB: push _db notes')
-        .setDesc('Upserts markdown files under Bookmarks/Authors folders into video_notes via PUT /items/{id}/note-md.')
+        .setDesc(
+          'Upserts markdown files under your configured _db folders into video_notes via PUT /items/{id}/note-md. (Active-only strategy pushes from Active notes folder.)'
+        )
         .addButton((btn) =>
           btn.setButtonText('Push now').onClick(async () => {
             const baseUrl = this.plugin.settings.apiBaseUrl.replace(/\/$/, '');
             const max = Math.max(0, this.plugin.settings.syncMaxItems ?? 2000);
             const deleteAfter = Boolean(this.plugin.settings.pushDeleteAfter);
 
-            const roots = [this.plugin.settings.bookmarksNotesDir, this.plugin.settings.authorsNotesDir];
+            const strategy = String(this.plugin.settings.vaultWriteStrategy || 'split');
+
+            const roots =
+              strategy === 'active-only'
+                ? [this.plugin.settings.activeNotesDir]
+                : [this.plugin.settings.bookmarksNotesDir, this.plugin.settings.authorsNotesDir];
             let files: TFile[] = [];
             for (const r of roots) {
               const folder = this.app.vault.getAbstractFileByPath(r);
@@ -806,11 +853,44 @@ export class SxDbSettingTab extends PluginSettingTab {
               new Notice('No markdown files found under configured _db folders.');
               return;
             }
+            // De-dupe by ID (basename) to avoid pushing the same item multiple times.
+            const byId = new Map<string, TFile[]>();
+            for (const f of files) {
+              const id = String(f.basename || '').trim();
+              if (!id) continue;
+              const arr = byId.get(id) ?? [];
+              arr.push(f);
+              byId.set(id, arr);
+            }
+
+            const activeRoot = normalizePath(this.plugin.settings.activeNotesDir);
+            let dupGroups = 0;
+            const uniqueFiles: TFile[] = [];
+            for (const arr of byId.values()) {
+              if (!arr.length) continue;
+              if (arr.length > 1) dupGroups += 1;
+
+              let best = arr[0];
+              let bestScore = -Infinity;
+              for (const f of arr) {
+                const inActive = normalizePath(f.path).startsWith(activeRoot + '/');
+                const mtime = Number((f.stat as any)?.mtime ?? 0);
+                const score = (inActive ? 1_000_000_000_000 : 0) + mtime;
+                if (score > bestScore) {
+                  bestScore = score;
+                  best = f;
+                }
+              }
+
+              uniqueFiles.push(best);
+            }
+
+            files = uniqueFiles;
             if (max && files.length > max) files = files.slice(0, max);
 
             let pushed = 0;
             let deleted = 0;
-            new Notice(`Pushing ${files.length} note(s) to DB…`);
+            new Notice(`Pushing ${files.length} note(s) to DB…${dupGroups ? ` (${dupGroups} duplicate id group(s) skipped)` : ''}`);
 
             for (const f of files) {
               const id = f.basename;

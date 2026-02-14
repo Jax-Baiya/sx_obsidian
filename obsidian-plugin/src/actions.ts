@@ -41,6 +41,35 @@ function extractUserMetaPayload(md: string): any | null {
     return toStringOrNull(v);
   };
 
+  const toStringArrayOrNull = (v: any): string[] | null => {
+    if (v == null) return null;
+    if (Array.isArray(v)) {
+      const arr = v.map((x: any) => String(x).trim()).filter(Boolean);
+      return arr.length ? arr : [];
+    }
+
+    const s = String(v).trim();
+    if (!s) return null;
+
+    if ((s.startsWith('[') && s.endsWith(']')) || (s.startsWith('{') && s.endsWith('}'))) {
+      try {
+        const obj = JSON.parse(s);
+        if (Array.isArray(obj)) {
+          const arr = obj.map((x: any) => String(x).trim()).filter(Boolean);
+          return arr.length ? arr : [];
+        }
+      } catch {
+        // fall through to csv/newline split
+      }
+    }
+
+    const arr = s
+      .split(/[\n,]/g)
+      .map((x) => String(x).trim())
+      .filter(Boolean);
+    return arr.length ? arr : [];
+  };
+
   const tagsVal = (fm as any).tags;
   const tagsStr = Array.isArray(tagsVal)
     ? tagsVal.map((t: any) => String(t).trim()).filter(Boolean).join(',')
@@ -68,6 +97,7 @@ function extractUserMetaPayload(md: string): any | null {
     tags: tagsStr,
     notes: toStringOrNull((fm as any).notes),
     product_link: toStringOrNull((fm as any).product_link),
+    author_links: toStringArrayOrNull((fm as any).author_links),
     platform_targets: toJsonOrStringOrNull((fm as any).platform_targets ?? (fm as any).platform_target),
     workflow_log: toJsonOrStringOrNull((fm as any).workflow_log),
     post_url: toStringOrNull((fm as any).post_url),

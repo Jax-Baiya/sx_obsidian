@@ -17,6 +17,7 @@ const USER_OWNED_KEYS = new Set<string>([
   'notes',
   'scheduled_time',
   'product_link',
+  'author_links',
   'platform_targets',
   'workflow_log',
   'post_url',

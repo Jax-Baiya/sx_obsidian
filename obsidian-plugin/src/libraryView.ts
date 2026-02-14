@@ -32,6 +32,7 @@ type ApiItem = {
     tags?: string | null;
     notes?: string | null;
     product_link?: string | null;
+    author_links?: string[] | string | null;
     platform_targets?: string | null;
     workflow_log?: string | null;
     post_url?: string | null;
@@ -262,6 +263,7 @@ export class LibraryView extends ItemView {
     tags: true,
     notes: true,
     product_link: false,
+    author_links: false,
     platform_targets: false,
     post_url: false,
     published_time: false,
@@ -382,6 +384,102 @@ export class LibraryView extends ItemView {
     } catch {
       window.open(raw);
     }
+  }
+
+  private shouldCopyLinkOnClick(evt: MouseEvent): boolean {
+    const mode = String((this.plugin.settings as any).libraryLinkCopyModifier || 'ctrl-cmd');
+    if (mode === 'alt') return Boolean((evt as any).altKey);
+    if (mode === 'shift') return Boolean((evt as any).shiftKey);
+    return Boolean((evt as any).ctrlKey) || Boolean((evt as any).metaKey);
+  }
+
+  private parseLinksValue(v: unknown): string[] {
+    if (v == null) return [];
+
+    let rawItems: string[] = [];
+    if (Array.isArray(v)) {
+      rawItems = v.map((x) => String(x).trim());
+    } else {
+      const s = String(v).trim();
+      if (!s) return [];
+
+      if ((s.startsWith('[') && s.endsWith(']')) || (s.startsWith('{') && s.endsWith('}'))) {
+        try {
+          const obj = JSON.parse(s);
+          if (Array.isArray(obj)) {
+            rawItems = obj.map((x) => String(x).trim());
+          } else {
+            rawItems = [s];
+          }
+        } catch {
+          rawItems = s.split(/[\n,]/g).map((x) => String(x).trim());
+        }
+      } else {
+        rawItems = s.split(/[\n,]/g).map((x) => String(x).trim());
+      }
+    }
+
+    const out: string[] = [];
+    for (const x of rawItems) {
+      if (!x) continue;
+      if (out.includes(x)) continue;
+      out.push(x);
+    }
+    return out;
+  }
+
+  private renderLinkPills(container: HTMLElement, urls: string[]): void {
+    container.empty();
+    if (!urls.length) {
+      container.style.display = 'none';
+      return;
+    }
+
+    container.style.display = 'flex';
+    for (const u of urls) {
+      const a = container.createEl('a', {
+        text: u,
+        href: u,
+        cls: 'sxdb-meta-linkpill'
+      });
+      a.setAttr('target', '_blank');
+      a.setAttr('rel', 'noopener noreferrer');
+      a.addEventListener('click', (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        if (this.shouldCopyLinkOnClick(evt as MouseEvent)) {
+          void this.copyToClipboard(u).then((ok) => {
+            if (ok) new Notice('Copied link.');
+          });
+          return;
+        }
+        this.openProtocolOrUrl(u);
+      });
+    }
+  }
+
+  private bindRenderedMetadataLinkBehavior(container: HTMLElement): void {
+    container.addEventListener('click', (evt) => {
+      const t = evt.target as HTMLElement | null;
+      if (!t) return;
+      const a = t.closest('a[href]') as HTMLAnchorElement | null;
+      if (!a) return;
+      const href = String(a.getAttribute('href') || '').trim();
+      if (!href) return;
+      if (!/^(https?:\/\/|sxopen:|sxreveal:)/i.test(href)) return;
+
+      evt.preventDefault();
+      evt.stopPropagation();
+
+      if (this.shouldCopyLinkOnClick(evt as MouseEvent)) {
+        void this.copyToClipboard(href).then((ok) => {
+          if (ok) new Notice('Copied link.');
+        });
+        return;
+      }
+
+      this.openProtocolOrUrl(href);
+    });
   }
 
   private async ensureFolder(folderPath: string): Promise<TFolder> {
@@ -540,6 +638,7 @@ export class LibraryView extends ItemView {
     tags: true,
     notes: true,
     product_link: false,
+    author_links: false,
     platform_targets: false,
     post_url: false,
     published_time: false,
@@ -1073,6 +1172,7 @@ export class LibraryView extends ItemView {
       if (!this.hoverMdState || token !== this.hoverMdState.token) return;
       this.hoverMdBodyEl.empty();
       await MarkdownRenderer.renderMarkdown(String(md ?? ''), this.hoverMdBodyEl, file.path, this);
+      this.bindRenderedMetadataLinkBehavior(this.hoverMdBodyEl);
     } catch (e: any) {
       if (!this.hoverMdState || token !== this.hoverMdState.token) return;
       this.hoverMdBodyEl.empty();
@@ -1168,6 +1268,7 @@ export class LibraryView extends ItemView {
     const fmPatch: Record<string, any> = {};
     for (const [k, v] of Object.entries(patch || {})) {
       if (k === 'tags') fmPatch[k] = this.normalizeTagsValue(v);
+      else if (k === 'author_links') fmPatch[k] = this.parseLinksValue(v);
       else fmPatch[k] = this.normalizeYamlValue(v);
     }
 
@@ -1192,6 +1293,83 @@ export class LibraryView extends ItemView {
         this.plugin.markRecentlyWritten(f.path);
       } catch {
         // Best-effort only.
+      }
+    }
+  }
+
+  private async findVaultNotesForAuthor(authorUniqueId?: string | null, authorName?: string | null): Promise<TFile[]> {
+    const uid = String(authorUniqueId || '').trim();
+    const name = String(authorName || '').trim();
+    if (!uid && !name) return [];
+
+    const roots = [
+      normalizePath(this.plugin.settings.activeNotesDir),
+      normalizePath(this.plugin.settings.bookmarksNotesDir),
+      normalizePath(this.plugin.settings.authorsNotesDir)
+    ].filter(Boolean);
+
+    const out: TFile[] = [];
+    const seen = new Set<string>();
+    for (const f of this.app.vault.getFiles()) {
+      if (f.extension !== 'md') continue;
+      const p = normalizePath(f.path);
+      if (!roots.some((r) => r && (p === r || p.startsWith(r + '/')))) continue;
+
+      try {
+        const md = await this.app.vault.read(f);
+        const { fm } = this.extractFrontmatter(md);
+        if (!fm || typeof fm !== 'object') continue;
+        const fUid = String((fm as any).author_unique_id || '').trim();
+        const fName = String((fm as any).author_name || '').trim();
+        const match = (uid && fUid === uid) || (!uid && name && fName === name);
+        if (!match) continue;
+        if (seen.has(f.path)) continue;
+        seen.add(f.path);
+        out.push(f);
+      } catch {
+        // ignore parse/read failures
+      }
+    }
+
+    return out;
+  }
+
+  private async updateVaultFrontmatterForAuthor(
+    authorUniqueId: string | null | undefined,
+    authorName: string | null | undefined,
+    patch: Record<string, any>
+  ): Promise<void> {
+    const files = await this.findVaultNotesForAuthor(authorUniqueId, authorName);
+    if (!files.length) return;
+
+    const fmPatch: Record<string, any> = {};
+    for (const [k, v] of Object.entries(patch || {})) {
+      if (k === 'tags') fmPatch[k] = this.normalizeTagsValue(v);
+      else if (k === 'author_links') fmPatch[k] = this.parseLinksValue(v);
+      else fmPatch[k] = this.normalizeYamlValue(v);
+    }
+
+    const fmApi: any = (this.app as any).fileManager;
+    if (!fmApi?.processFrontMatter) return;
+
+    for (const f of files) {
+      try {
+        await fmApi.processFrontMatter(f, (fm: any) => {
+          for (const [k, v] of Object.entries(fmPatch)) {
+            if (v == null || v === '') {
+              try {
+                delete fm[k];
+              } catch {
+                // ignore
+              }
+            } else {
+              fm[k] = v;
+            }
+          }
+        });
+        this.plugin.markRecentlyWritten(f.path);
+      } catch {
+        // best-effort
       }
     }
   }
@@ -1541,6 +1719,7 @@ export class LibraryView extends ItemView {
       const prelude = this.buildPeekPrelude(fm);
       const renderMd = `${prelude}${body || ''}`;
       await MarkdownRenderer.renderMarkdown(renderMd, this.notePeekBodyEl, file.path, this);
+      this.bindRenderedMetadataLinkBehavior(this.notePeekBodyEl);
     } catch (e: any) {
       this.notePeekBodyEl.empty();
       this.notePeekBodyEl.createEl('pre', {
@@ -2121,6 +2300,7 @@ export class LibraryView extends ItemView {
           { key: 'tags', label: 'Tags' },
           { key: 'notes', label: 'Notes' },
           { key: 'product_link', label: 'Product link' },
+          { key: 'author_links', label: 'Author links' },
           { key: 'platform_targets', label: 'Platform targets' },
           { key: 'post_url', label: 'Post URL' },
           { key: 'published_time', label: 'Published time' },
@@ -2483,6 +2663,7 @@ export class LibraryView extends ItemView {
       { key: 'tags', label: 'Tags' },
       { key: 'notes', label: 'Notes' },
       { key: 'product_link', label: 'Product link' },
+      { key: 'author_links', label: 'Author links' },
       { key: 'platform_targets', label: 'Platform targets' },
       { key: 'post_url', label: 'Post URL' },
       { key: 'published_time', label: 'Published time' },
@@ -2604,10 +2785,15 @@ export class LibraryView extends ItemView {
       let tags: HTMLInputElement | null = null;
       let notes: HTMLInputElement | null = null;
       let productLink: HTMLInputElement | null = null;
+      let authorLinks: HTMLInputElement | null = null;
       let platformTargets: HTMLInputElement | null = null;
       let postUrl: HTMLInputElement | null = null;
       let publishedTime: HTMLInputElement | null = null;
       let workflowLog: HTMLInputElement | null = null;
+
+      let productLinkPills: HTMLDivElement | null = null;
+      let authorLinksPills: HTMLDivElement | null = null;
+      let postUrlPills: HTMLDivElement | null = null;
 
       let previewBtn: HTMLButtonElement | null = null;
       let openLocalBtn: HTMLButtonElement | null = null;
@@ -2813,6 +2999,25 @@ export class LibraryView extends ItemView {
           productLink = td.createEl('input', { type: 'text' });
           productLink.placeholder = 'https://…';
           productLink.value = meta.product_link ?? '';
+          productLinkPills = td.createDiv({ cls: 'sxdb-meta-linkpills' });
+          this.renderLinkPills(productLinkPills, this.parseLinksValue(productLink.value));
+          productLink.addEventListener('input', () => {
+            if (productLinkPills) this.renderLinkPills(productLinkPills, this.parseLinksValue(productLink?.value ?? ''));
+          });
+          continue;
+        }
+
+        if (c.key === 'author_links') {
+          const td = tr.createEl('td');
+          td.setAttr('data-col', 'author_links');
+          authorLinks = td.createEl('input', { type: 'text' });
+          authorLinks.placeholder = 'https://a.com, https://b.com';
+          authorLinks.value = this.parseLinksValue((meta as any).author_links).join(', ');
+          authorLinksPills = td.createDiv({ cls: 'sxdb-meta-linkpills' });
+          this.renderLinkPills(authorLinksPills, this.parseLinksValue(authorLinks.value));
+          authorLinks.addEventListener('input', () => {
+            if (authorLinksPills) this.renderLinkPills(authorLinksPills, this.parseLinksValue(authorLinks?.value ?? ''));
+          });
           continue;
         }
 
@@ -2831,6 +3036,11 @@ export class LibraryView extends ItemView {
           postUrl = td.createEl('input', { type: 'text' });
           postUrl.placeholder = 'https://…';
           postUrl.value = meta.post_url ?? '';
+          postUrlPills = td.createDiv({ cls: 'sxdb-meta-linkpills' });
+          this.renderLinkPills(postUrlPills, this.parseLinksValue(postUrl.value));
+          postUrl.addEventListener('input', () => {
+            if (postUrlPills) this.renderLinkPills(postUrlPills, this.parseLinksValue(postUrl?.value ?? ''));
+          });
           continue;
         }
 
@@ -2888,6 +3098,7 @@ export class LibraryView extends ItemView {
           tags: meta.tags ?? null,
           notes: meta.notes ?? null,
           product_link: meta.product_link ?? null,
+          author_links: this.parseLinksValue((meta as any).author_links),
           platform_targets: meta.platform_targets ?? null,
           workflow_log: meta.workflow_log ?? null,
           post_url: meta.post_url ?? null,
@@ -2899,6 +3110,7 @@ export class LibraryView extends ItemView {
         if (tags) payload.tags = tags.value.trim() || null;
         if (notes) payload.notes = notes.value.trim() || null;
         if (productLink) payload.product_link = productLink.value.trim() || null;
+        if (authorLinks) payload.author_links = this.parseLinksValue(authorLinks.value);
         if (platformTargets) payload.platform_targets = platformTargets.value.trim() || null;
         if (workflowLog) payload.workflow_log = workflowLog.value.trim() || null;
         if (postUrl) payload.post_url = postUrl.value.trim() || null;
@@ -2919,6 +3131,13 @@ export class LibraryView extends ItemView {
           fmPatch.status = ss.length ? ss : null;
           delete fmPatch.statuses;
           await this.updateVaultFrontmatterForId(it.id, fmPatch);
+
+          // Author links are author-scoped: mirror across all local notes with the same author.
+          if (Object.prototype.hasOwnProperty.call(payload, 'author_links')) {
+            await this.updateVaultFrontmatterForAuthor(it.author_unique_id, it.author_name, {
+              author_links: payload.author_links
+            });
+          }
         } catch (e: any) {
           new Notice(`Failed saving meta for ${it.id}: ${String(e?.message ?? e)}`);
         }
@@ -2929,6 +3148,7 @@ export class LibraryView extends ItemView {
       tags?.addEventListener('change', () => void saveMeta());
       notes?.addEventListener('change', () => void saveMeta());
       productLink?.addEventListener('change', () => void saveMeta());
+      authorLinks?.addEventListener('change', () => void saveMeta());
       platformTargets?.addEventListener('change', () => void saveMeta());
       workflowLog?.addEventListener('change', () => void saveMeta());
       postUrl?.addEventListener('change', () => void saveMeta());

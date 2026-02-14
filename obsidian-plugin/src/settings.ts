@@ -48,6 +48,7 @@ export interface SxDbSettings {
   libraryHoverPreviewMuted: boolean;
   libraryHoverPreviewWidth: number;
   libraryHoverPreviewHeight: number;
+  libraryLinkCopyModifier: 'ctrl-cmd' | 'alt' | 'shift';
 
   // SX Library: ID column UX
   libraryIdWrapMode: 'wrap' | 'ellipsis' | 'clip';
@@ -132,6 +133,7 @@ export const DEFAULT_SETTINGS: SxDbSettings = {
   // Default: portrait hover preview (roughly 9:16), “mini TikTok” sized.
   libraryHoverPreviewWidth: 240,
   libraryHoverPreviewHeight: 426,
+  libraryLinkCopyModifier: 'ctrl-cmd',
 
   libraryIdWrapMode: 'ellipsis',
   libraryIdCtrlHoverPreview: true,
@@ -165,6 +167,7 @@ export const DEFAULT_SETTINGS: SxDbSettings = {
     tags: true,
     notes: true,
     product_link: false,
+    author_links: false,
     platform_targets: false,
     post_url: false,
     published_time: false,
@@ -182,6 +185,7 @@ export const DEFAULT_SETTINGS: SxDbSettings = {
     'tags',
     'notes',
     'product_link',
+    'author_links',
     'platform_targets',
     'post_url',
     'published_time',
@@ -1125,6 +1129,21 @@ export class SxDbSettingTab extends PluginSettingTab {
               await this.plugin.saveSettings();
             })
         );
+
+      new Setting(el)
+        .setName('Metadata links: modifier-click copies URL')
+        .setDesc('Direct click opens links. Hold this key while clicking a metadata URL to copy it instead.')
+        .addDropdown((dd) => {
+          dd.addOption('ctrl-cmd', 'Ctrl (Windows/Linux) / Cmd (macOS)');
+          dd.addOption('alt', 'Alt / Option');
+          dd.addOption('shift', 'Shift');
+          dd.setValue(this.plugin.settings.libraryLinkCopyModifier || 'ctrl-cmd');
+          dd.onChange(async (v) => {
+            const next = v === 'alt' || v === 'shift' ? (v as any) : 'ctrl-cmd';
+            this.plugin.settings.libraryLinkCopyModifier = next;
+            await this.plugin.saveSettings();
+          });
+        });
 
       el.createEl('p', {
         text:

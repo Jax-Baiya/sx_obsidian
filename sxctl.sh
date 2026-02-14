@@ -6,6 +6,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
+LAST_VAULT_PATH_FILE="$ROOT_DIR/_logs/last_successful_vault_path"
 
 say() { printf "%s\n" "$*"; }
 die() { say "$*" >&2; exit 1; }
@@ -47,30 +48,82 @@ guess_vault_path() {
   fi
 }
 
+read_last_vault_path() {
+  if [ -f "$LAST_VAULT_PATH_FILE" ]; then
+    head -n 1 "$LAST_VAULT_PATH_FILE" 2>/dev/null || true
+  else
+    printf "%s" ""
+  fi
+}
+
+remember_last_vault_path() {
+  local p="$1"
+  [ -n "$p" ] || return 0
+  mkdir -p "$(dirname "$LAST_VAULT_PATH_FILE")" 2>/dev/null || true
+  printf "%s\n" "$p" > "$LAST_VAULT_PATH_FILE" 2>/dev/null || true
+}
+
 ensure_vault_path() {
-  if [ -n "${OBSIDIAN_VAULT_PATH:-}" ]; then
+  is_valid_vault_path() {
+    local p="$1"
+    [ -n "$p" ] || return 1
+    [ -d "$p" ] || return 1
     return 0
+  }
+
+  if [ -n "${OBSIDIAN_VAULT_PATH:-}" ]; then
+    if is_valid_vault_path "$OBSIDIAN_VAULT_PATH"; then
+      remember_last_vault_path "$OBSIDIAN_VAULT_PATH"
+      return 0
+    fi
+    say ""
+    say "OBSIDIAN_VAULT_PATH is set but invalid: $OBSIDIAN_VAULT_PATH"
+    say "Please provide an existing vault root directory."
+    unset OBSIDIAN_VAULT_PATH
   fi
 
-  local guess
-  guess="$(guess_vault_path)"
+  local remembered settings_guess guess
+  remembered="$(read_last_vault_path)"
+  settings_guess="$(guess_vault_path)"
+  guess=""
+
+  if [ -n "$remembered" ] && is_valid_vault_path "$remembered"; then
+    guess="$remembered"
+  elif [ -n "$settings_guess" ] && is_valid_vault_path "$settings_guess"; then
+    guess="$settings_guess"
+  fi
 
   say ""
   say "Plugin install needs OBSIDIAN_VAULT_PATH (your vault root)."
   if [ -n "$guess" ]; then
-    say "Detected default from settings: $guess"
+    if [ -n "$remembered" ] && [ "$guess" = "$remembered" ]; then
+      say "Using remembered successful path: $guess"
+    else
+      say "Detected default from settings: $guess"
+    fi
+  else
+    say "No valid default vault path detected from settings."
   fi
 
-  local vault
-  read -r -p "Enter OBSIDIAN_VAULT_PATH${guess:+ [$guess]}: " vault
-  vault="${vault:-$guess}"
+  while true; do
+    local vault
+    read -r -p "Enter OBSIDIAN_VAULT_PATH${guess:+ [$guess]}: " vault
+    vault="${vault:-$guess}"
 
-  if [ -z "$vault" ]; then
-    die "Missing OBSIDIAN_VAULT_PATH. Aborting plugin install."
-  fi
+    if [ -z "$vault" ]; then
+      die "Missing OBSIDIAN_VAULT_PATH. Aborting plugin install."
+    fi
 
-  # Only sets for this script process (and commands it spawns).
-  export OBSIDIAN_VAULT_PATH="$vault"
+    if is_valid_vault_path "$vault"; then
+      export OBSIDIAN_VAULT_PATH="$vault"
+      remember_last_vault_path "$vault"
+      return 0
+    fi
+
+    say "Path does not exist or is not accessible on this system: $vault"
+    say "Tip: on Linux/WSL, use the mounted path (example: /mnt/c/... or a native Linux path)."
+    guess=""
+  done
 }
 
 cmd="${1:-menu}"

@@ -12,6 +12,12 @@ if [ -z "${OBSIDIAN_VAULT_PATH:-}" ]; then
   exit 1
 fi
 
+if [ ! -d "$OBSIDIAN_VAULT_PATH" ]; then
+  echo "OBSIDIAN_VAULT_PATH does not exist or is not accessible: $OBSIDIAN_VAULT_PATH" >&2
+  echo "Use your real vault root path for this environment (Linux/WSL path)." >&2
+  exit 1
+fi
+
 PLUGIN_ID="sx-obsidian-db"
 TARGET="$OBSIDIAN_VAULT_PATH/.obsidian/plugins/$PLUGIN_ID"
 

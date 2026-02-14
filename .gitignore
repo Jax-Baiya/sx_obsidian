@@ -52,3 +52,16 @@ obsidian-plugin/node_modules/
 obsidian-plugin/main.js
 obsidian-plugin/main.js.map
 obsidian-plugin/dist/
+
+# markdownlint cache
+.markdownlint_cache
+rough_works.md
+
+# packaged releases
+*.zip
+*.tar.gz
+*.tar.bz2
+
+# dir
+dist/
+data/

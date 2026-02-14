@@ -14,6 +14,25 @@ import {
 import type SxDbPlugin from './main';
 import { mergeMarkdownPreservingUserEdits } from './markdownMerge';
 import { openPinnedFile } from './leafUtils';
+import {
+  applyCellSingleSelection,
+  applyColumnSingleSelection,
+  applyRowSingleSelection,
+  applySelectAllToggle,
+  cellSelectionKey,
+  choosePrimaryWorkflowStatus,
+  clearSingleSelectionState,
+  computeHoverVideoSizePx,
+  formatLinkChipLabel,
+  getWorkflowStatuses,
+  hasAnyVisibleColumns,
+  normalizeTagsValue as normalizeTagsValueCore,
+  parseLinksValue as parseLinksValueCore,
+  sanitizeColumnOrder,
+  sanitizeColumnWidths,
+  shouldCommitLinkChipOnKey as shouldCommitLinkChipOnKeyCore,
+  validateHttpUrlLike
+} from './libraryCore';
 
 type ApiItem = {
   id: string;
@@ -61,6 +80,15 @@ export const SXDB_LIBRARY_VIEW = 'sxdb-library-view';
 
 export class LibraryView extends ItemView {
   plugin: SxDbPlugin;
+
+  private rowHeights: Record<string, number> = {};
+  private selectedCells = new Set<string>();
+  private selectedRows = new Set<string>();
+  private selectedCols = new Set<string>();
+  private tableSelectedAll = false;
+
+  private hoverVideoEl: HTMLVideoElement | null = null;
+  private hoverVideoHideT: number | null = null;
 
   private onWindowResize?: () => void;
 
@@ -253,6 +281,7 @@ export class LibraryView extends ItemView {
   private hoverMdOnScroll?: () => void;
 
   private readonly DEFAULT_COLUMNS: Record<string, boolean> = {
+    index: true,
     thumb: true,
     id: true,
     author: true,
@@ -394,38 +423,7 @@ export class LibraryView extends ItemView {
   }
 
   private parseLinksValue(v: unknown): string[] {
-    if (v == null) return [];
-
-    let rawItems: string[] = [];
-    if (Array.isArray(v)) {
-      rawItems = v.map((x) => String(x).trim());
-    } else {
-      const s = String(v).trim();
-      if (!s) return [];
-
-      if ((s.startsWith('[') && s.endsWith(']')) || (s.startsWith('{') && s.endsWith('}'))) {
-        try {
-          const obj = JSON.parse(s);
-          if (Array.isArray(obj)) {
-            rawItems = obj.map((x) => String(x).trim());
-          } else {
-            rawItems = [s];
-          }
-        } catch {
-          rawItems = s.split(/[\n,]/g).map((x) => String(x).trim());
-        }
-      } else {
-        rawItems = s.split(/[\n,]/g).map((x) => String(x).trim());
-      }
-    }
-
-    const out: string[] = [];
-    for (const x of rawItems) {
-      if (!x) continue;
-      if (out.includes(x)) continue;
-      out.push(x);
-    }
-    return out;
+    return parseLinksValueCore(v);
   }
 
   private renderLinkPills(container: HTMLElement, urls: string[]): void {
@@ -437,11 +435,14 @@ export class LibraryView extends ItemView {
 
     container.style.display = 'flex';
     for (const u of urls) {
+      const label = formatLinkChipLabel(u);
+
       const a = container.createEl('a', {
-        text: u,
+        text: label,
         href: u,
         cls: 'sxdb-meta-linkpill'
       });
+      a.setAttr('title', u);
       a.setAttr('target', '_blank');
       a.setAttr('rel', 'noopener noreferrer');
       a.addEventListener('click', (evt) => {
@@ -480,6 +481,150 @@ export class LibraryView extends ItemView {
 
       this.openProtocolOrUrl(href);
     });
+  }
+
+  private shouldCommitLinkChipOnKey(evt: KeyboardEvent): boolean {
+    const mode = String((this.plugin.settings as any).libraryLinkChipCommitOn || 'tab');
+    return shouldCommitLinkChipOnKeyCore(evt.key, mode);
+  }
+
+  private validateUrlLike(v: string): boolean {
+    return validateHttpUrlLike(v);
+  }
+
+  private cellKey(rowId: string, colKey: string): string {
+    return cellSelectionKey(rowId, colKey);
+  }
+
+  private clearSelectionState(): void {
+    clearSingleSelectionState(this.selectedCells, this.selectedRows, this.selectedCols);
+    this.tableSelectedAll = false;
+  }
+
+  private updateSelectionClasses(table: HTMLTableElement): void {
+    if (!table?.isConnected) return;
+
+    const headers = table.querySelectorAll('thead th[data-col]') as NodeListOf<HTMLTableCellElement>;
+    headers.forEach((th) => {
+      const col = String(th.getAttribute('data-col') || '').trim();
+      if (!col) return;
+      const selected = (col === 'index' && this.tableSelectedAll) || this.selectedCols.has(col);
+      if (selected) th.addClass('sxdb-cell-selected');
+      else th.removeClass('sxdb-cell-selected');
+    });
+
+    const rows = table.querySelectorAll('tbody tr[data-row-id]') as NodeListOf<HTMLTableRowElement>;
+    rows.forEach((tr) => {
+      const rowId = String(tr.getAttribute('data-row-id') || '').trim();
+      if (!rowId) return;
+      const cells = tr.querySelectorAll('td[data-col]') as NodeListOf<HTMLTableCellElement>;
+      cells.forEach((td) => {
+        const col = String(td.getAttribute('data-col') || '').trim();
+        if (!col) return;
+        const selected = this.tableSelectedAll
+          || this.selectedRows.has(rowId)
+          || this.selectedCols.has(col)
+          || this.selectedCells.has(this.cellKey(rowId, col));
+        if (selected) td.addClass('sxdb-cell-selected');
+        else td.removeClass('sxdb-cell-selected');
+      });
+    });
+  }
+
+  private clearHoverVideoHideTimer(): void {
+    if (this.hoverVideoHideT != null) {
+      window.clearTimeout(this.hoverVideoHideT);
+      this.hoverVideoHideT = null;
+    }
+  }
+
+  private hideHoverVideo(): void {
+    this.clearHoverVideoHideTimer();
+    if (!this.hoverVideoEl) return;
+    try {
+      this.hoverVideoEl.pause();
+    } catch {
+      // ignore
+    }
+    this.hoverVideoEl.style.display = 'none';
+  }
+
+  private scheduleHideHoverVideo(delayMs: number = 120): void {
+    this.clearHoverVideoHideTimer();
+    this.hoverVideoHideT = window.setTimeout(() => {
+      this.hoverVideoHideT = null;
+      this.hideHoverVideo();
+    }, Math.max(0, delayMs));
+  }
+
+  private ensureHoverVideoElement(): HTMLVideoElement {
+    if (this.hoverVideoEl?.isConnected) return this.hoverVideoEl;
+
+    if (this.hoverVideoEl) {
+      try {
+        this.hoverVideoEl.remove();
+      } catch {
+        // ignore
+      }
+    }
+
+    const video = document.createElement('video');
+    video.className = 'sxdb-lib-hovervideo sxdb-lib-hovervideo-floating';
+    video.loop = true;
+    video.playsInline = true;
+    video.preload = 'metadata';
+    video.controls = true;
+    video.style.display = 'none';
+    video.addEventListener('mouseenter', () => this.clearHoverVideoHideTimer());
+    video.addEventListener('mouseleave', () => this.scheduleHideHoverVideo(80));
+    document.body.appendChild(video);
+
+    this.hoverVideoEl = video;
+    return video;
+  }
+
+  private positionHoverVideo(anchorEl: HTMLElement, video: HTMLVideoElement): void {
+    const { w, h } = this.getHoverVideoSizePx();
+    const rect = anchorEl.getBoundingClientRect();
+
+    let x = Math.floor(rect.right + 10);
+    let y = Math.floor(rect.top);
+    if (x + w > window.innerWidth - 8) x = Math.max(8, Math.floor(rect.left - w - 10));
+    if (y + h > window.innerHeight - 8) y = Math.max(8, window.innerHeight - h - 8);
+    if (y < 8) y = 8;
+
+    video.style.left = `${x}px`;
+    video.style.top = `${y}px`;
+    video.style.width = `${Math.floor(w)}px`;
+    video.style.height = `${Math.floor(h)}px`;
+  }
+
+  private getHoverVideoSizePx(): { w: number; h: number } {
+    return computeHoverVideoSizePx({
+      mode: (this.plugin.settings as any).libraryHoverVideoResizeMode,
+      scalePct: (this.plugin.settings as any).libraryHoverVideoScalePct,
+      width: this.plugin.settings.libraryHoverPreviewWidth,
+      height: this.plugin.settings.libraryHoverPreviewHeight
+    });
+  }
+
+  private async showHoverVideoForItem(id: string, anchorEl: HTMLElement): Promise<void> {
+    if (!this.plugin.settings.libraryHoverVideoPreview) return;
+    const video = this.ensureHoverVideoElement();
+    this.clearHoverVideoHideTimer();
+
+    const src = `${this.baseUrl()}/media/video/${encodeURIComponent(id)}`;
+    if (video.src !== src) video.src = src;
+    video.muted = Boolean(this.plugin.settings.libraryHoverPreviewMuted);
+
+    this.positionHoverVideo(anchorEl, video);
+    video.style.display = 'block';
+
+    try {
+      await video.play();
+    } catch {
+      // Autoplay may be blocked; controls allow manual play.
+    }
   }
 
   private async ensureFolder(folderPath: string): Promise<TFolder> {
@@ -541,15 +686,11 @@ export class LibraryView extends ItemView {
   private _statusEditorEl: HTMLDivElement | null = null;
 
   private workflowStatuses(): string[] {
-    return ['raw', 'reviewing', 'reviewed', 'scheduling', 'scheduled', 'published', 'archived'];
+    return getWorkflowStatuses();
   }
 
   private choosePrimaryStatus(statuses: string[]): string | null {
-    const clean = (statuses || []).map((s) => String(s).trim()).filter(Boolean);
-    if (!clean.length) return null;
-    const order = this.workflowStatuses();
-    const ranked = order.filter((s) => clean.includes(s));
-    return ranked.length ? ranked[ranked.length - 1] : clean[0];
+    return choosePrimaryWorkflowStatus(statuses);
   }
 
   private closeStatusEditor(): void {
@@ -629,6 +770,7 @@ export class LibraryView extends ItemView {
   }
 
   private columns: Record<string, boolean> = {
+    index: true,
     thumb: true,
     id: true,
     author: true,
@@ -647,9 +789,7 @@ export class LibraryView extends ItemView {
   };
 
   private normalizeColumnsState(): void {
-    const keys = Object.keys(this.columns);
-    const anyVisible = keys.some((k) => Boolean(this.columns[k]));
-    if (!anyVisible) {
+    if (!hasAnyVisibleColumns(this.columns)) {
       // Repair corrupted settings where every column is hidden.
       this.columns = Object.assign({}, this.DEFAULT_COLUMNS);
       new Notice('SX Library: your saved column visibility hid everything — reset to defaults.');
@@ -686,16 +826,9 @@ export class LibraryView extends ItemView {
 
   private restoreLibraryLayoutFromSettings(): void {
     const ord = (this.plugin.settings as any).libraryColumnOrder as any;
-    if (Array.isArray(ord)) this.columnOrder = ord.filter((x) => typeof x === 'string');
+    if (Array.isArray(ord)) this.columnOrder = sanitizeColumnOrder(ord, Object.keys(this.DEFAULT_COLUMNS));
     const w = (this.plugin.settings as any).libraryColumnWidths as any;
-    if (w && typeof w === 'object') {
-      const next: Record<string, number> = {};
-      for (const [k, v] of Object.entries(w)) {
-        const n = Number(v);
-        if (Number.isFinite(n) && n > 0) next[String(k)] = Math.floor(n);
-      }
-      this.columnWidths = next;
-    }
+    this.columnWidths = sanitizeColumnWidths(w);
   }
 
   private persistLibraryStateDebounced(): void {
@@ -789,6 +922,16 @@ export class LibraryView extends ItemView {
       window.removeEventListener('resize', this.onWindowResize);
       this.onWindowResize = undefined;
     }
+
+    this.hideHoverVideo();
+    if (this.hoverVideoEl) {
+      try {
+        this.hoverVideoEl.remove();
+      } catch {
+        // ignore
+      }
+    }
+    this.hoverVideoEl = null;
   }
 
   private baseUrl(): string {
@@ -1195,42 +1338,8 @@ export class LibraryView extends ItemView {
     return s;
   }
 
-  private normalizeTagToken(raw: string): string | null {
-    let t = String(raw ?? '').trim();
-    if (!t) return null;
-    if (t.startsWith('#')) t = t.slice(1);
-
-    // Obsidian tags cannot contain spaces; prefer kebab-case.
-    t = t.replace(/\s+/g, '-');
-    t = t.replace(/-+/g, '-');
-    t = t.replace(/^[-]+|[-]+$/g, '');
-
-    // Keep only common tag-safe characters.
-    t = t.replace(/[^A-Za-z0-9/_-]/g, '');
-    if (!t) return null;
-    return t;
-  }
-
   private normalizeTagsValue(v: any): string[] | null {
-    if (v == null) return null;
-
-    const tokens: string[] = [];
-    const pushToken = (raw: string) => {
-      const t = this.normalizeTagToken(raw);
-      if (!t) return;
-      if (!tokens.includes(t)) tokens.push(t);
-    };
-
-    if (Array.isArray(v)) {
-      for (const x of v) pushToken(String(x ?? ''));
-    } else {
-      const s = String(v ?? '').trim();
-      if (!s) return null;
-      // Table input uses comma-separated tags; also tolerate newlines.
-      for (const part of s.split(/[,\n]/g)) pushToken(part);
-    }
-
-    return tokens.length ? tokens : null;
+    return normalizeTagsValueCore(v);
   }
 
   private async normalizeTagsFrontmatterInFile(file: TFile, mdHint?: string): Promise<void> {
@@ -1958,13 +2067,12 @@ export class LibraryView extends ItemView {
     if (this.menuHidden) contentEl.addClass('sxdb-menu-hidden');
     else contentEl.removeClass('sxdb-menu-hidden');
 
-    // ID wrapping mode (affects ID column presentation)
+    // Table wrapping mode (legacy setting name kept for compatibility)
     const idWrap = String(this.plugin.settings.libraryIdWrapMode || 'ellipsis');
     contentEl.setAttr('data-sxdb-idwrap', idWrap);
 
     // Apply hover preview sizing via CSS variables (so it updates without CSS edits).
-    const w = Math.max(120, Number(this.plugin.settings.libraryHoverPreviewWidth ?? 360));
-    const h = Math.max(90, Number(this.plugin.settings.libraryHoverPreviewHeight ?? 202));
+    const { w, h } = this.getHoverVideoSizePx();
     contentEl.style.setProperty('--sxdb-hovervideo-width', `${Math.floor(w)}px`);
     contentEl.style.setProperty('--sxdb-hovervideo-height', `${Math.floor(h)}px`);
 
@@ -2290,6 +2398,7 @@ export class LibraryView extends ItemView {
         panel.createEl('div', { text: 'Drag to reorder · Toggle to show/hide · Width is a number (px)', cls: 'sxdb-lib-columns-subtitle' });
 
         const defs: Array<{ key: keyof LibraryView['columns']; label: string }> = [
+          { key: 'index', label: '#' },
           { key: 'thumb', label: 'Thumb' },
           { key: 'id', label: 'ID' },
           { key: 'author', label: 'Author' },
@@ -2469,7 +2578,7 @@ export class LibraryView extends ItemView {
         popoverHost.empty();
         const panel = popoverHost.createDiv({ cls: 'sxdb-lib-viewmenu' });
         panel.createEl('div', { text: 'View', cls: 'sxdb-lib-columns-title' });
-        panel.createEl('div', { text: 'ID wrapping', cls: 'sxdb-lib-viewmenu-section' });
+        panel.createEl('div', { text: 'Cell wrapping', cls: 'sxdb-lib-viewmenu-section' });
 
         const modes: Array<{ id: 'ellipsis' | 'clip' | 'wrap'; label: string }> = [
           { id: 'ellipsis', label: 'Overflow: ellipsis' },
@@ -2638,8 +2747,7 @@ export class LibraryView extends ItemView {
     wrap.empty();
 
     // Ensure hover preview sizing reflects latest settings (settings may change while view is open).
-    const w = Math.max(120, Number(this.plugin.settings.libraryHoverPreviewWidth ?? 360));
-    const h = Math.max(90, Number(this.plugin.settings.libraryHoverPreviewHeight ?? 202));
+    const { w, h } = this.getHoverVideoSizePx();
     this.contentEl.style.setProperty('--sxdb-hovervideo-width', `${Math.floor(w)}px`);
     this.contentEl.style.setProperty('--sxdb-hovervideo-height', `${Math.floor(h)}px`);
 
@@ -2651,8 +2759,10 @@ export class LibraryView extends ItemView {
     }
 
     const table = wrap.createEl('table', { cls: 'sxdb-lib-table' });
+    wrap.addEventListener('scroll', () => this.scheduleHideHoverVideo(0), { passive: true });
 
     const defs: Array<{ key: string; label: string }> = [
+      { key: 'index', label: '#' },
       { key: 'thumb', label: 'Thumb' },
       { key: 'id', label: 'ID' },
       { key: 'author', label: 'Author' },
@@ -2672,18 +2782,7 @@ export class LibraryView extends ItemView {
     ];
 
     const allKeys = defs.map((d) => d.key);
-    const order: string[] = [];
-    const seen = new Set<string>();
-    for (const k of (Array.isArray(this.columnOrder) ? this.columnOrder : [])) {
-      if (typeof k !== 'string') continue;
-      if (!allKeys.includes(k)) continue;
-      if (seen.has(k)) continue;
-      seen.add(k);
-      order.push(k);
-    }
-    for (const k of allKeys) {
-      if (!seen.has(k)) order.push(k);
-    }
+    const order = sanitizeColumnOrder(this.columnOrder, allKeys);
 
     this.columnOrder = [...order];
 
@@ -2753,6 +2852,34 @@ export class LibraryView extends ItemView {
     for (const c of visibleDefs) {
       const th = trh.createEl('th', { text: c.label });
       th.setAttr('data-col', c.key);
+
+      th.addEventListener('click', (evt) => {
+        const t = evt.target as HTMLElement | null;
+        if (t?.closest('.sxdb-col-resizer')) return;
+        evt.preventDefault();
+        evt.stopPropagation();
+
+        if (c.key === 'index') {
+          this.tableSelectedAll = applySelectAllToggle(
+            this.selectedCells,
+            this.selectedRows,
+            this.selectedCols,
+            this.tableSelectedAll
+          );
+          this.updateSelectionClasses(table);
+          return;
+        }
+
+        this.tableSelectedAll = applyColumnSingleSelection(
+          this.selectedCells,
+          this.selectedRows,
+          this.selectedCols,
+          this.tableSelectedAll,
+          c.key
+        );
+        this.updateSelectionClasses(table);
+      });
+
       const width = this.columnWidths[c.key];
       if (width) applyWidth(c.key, width);
       const handle = th.createDiv({ cls: 'sxdb-col-resizer' });
@@ -2775,10 +2902,24 @@ export class LibraryView extends ItemView {
       }
     };
 
-    for (const it of items) {
+    for (const [rowIdx, it] of items.entries()) {
       const tr = tbody.createEl('tr');
+      tr.setAttr('data-row-id', it.id);
+      const h = this.rowHeights[it.id];
+      if (h && Number.isFinite(h) && h > 28) tr.style.height = `${Math.floor(h)}px`;
 
       const meta = it.meta ?? {};
+      const markInvalid = (el: HTMLInputElement | null, bad: boolean) => {
+        if (!el) return;
+        if (bad) el.addClass('sxdb-invalid');
+        else el.removeClass('sxdb-invalid');
+      };
+      const normalizeLinksInput = (input: HTMLInputElement | null, pills: HTMLDivElement | null) => {
+        if (!input) return;
+        const next = this.parseLinksValue(input.value).join(', ');
+        input.value = next;
+        if (pills) this.renderLinkPills(pills, this.parseLinksValue(next));
+      };
 
       // status is now edited via a multi-select popover; see status column renderer.
       let rating: HTMLInputElement | null = null;
@@ -2802,9 +2943,49 @@ export class LibraryView extends ItemView {
       let unpinBtn: HTMLButtonElement | null = null;
 
       for (const c of visibleDefs) {
+        if (c.key === 'index') {
+          const td = tr.createEl('td', { cls: 'sxdb-lib-index' });
+          td.setAttr('data-col', 'index');
+          td.setText(String(this.offset + rowIdx + 1));
+
+          td.addEventListener('click', (evt) => {
+            evt.preventDefault();
+            evt.stopPropagation();
+            this.tableSelectedAll = applyRowSingleSelection(
+              this.selectedCells,
+              this.selectedRows,
+              this.selectedCols,
+              this.tableSelectedAll,
+              it.id
+            );
+            this.updateSelectionClasses(table);
+          });
+
+          const rowRes = td.createDiv({ cls: 'sxdb-row-resizer' });
+          rowRes.addEventListener('mousedown', (evt) => {
+            evt.preventDefault();
+            evt.stopPropagation();
+            const startY = evt.clientY;
+            const startH = Math.max(28, Math.floor(tr.getBoundingClientRect().height || 28));
+            const onMove = (e: MouseEvent) => {
+              const next = Math.max(28, Math.floor(startH + (e.clientY - startY)));
+              this.rowHeights[it.id] = next;
+              tr.style.height = `${next}px`;
+            };
+            const onUp = () => {
+              document.removeEventListener('mousemove', onMove);
+              document.removeEventListener('mouseup', onUp);
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+          });
+          continue;
+        }
+
         if (c.key === 'thumb') {
           const td = tr.createEl('td', { cls: 'sxdb-lib-thumb' });
           td.setAttr('data-col', 'thumb');
+          td.setAttr('data-row-id', it.id);
           const img = td.createEl('img');
           img.loading = 'lazy';
           if (it.cover_path) {
@@ -2817,34 +2998,8 @@ export class LibraryView extends ItemView {
           }
 
           if (this.plugin.settings.libraryHoverVideoPreview) {
-            const video = td.createEl('video', { cls: 'sxdb-lib-hovervideo' });
-            video.muted = Boolean(this.plugin.settings.libraryHoverPreviewMuted);
-            video.loop = true;
-            video.playsInline = true;
-            video.preload = 'none';
-            video.controls = true;
-            video.src = `${this.baseUrl()}/media/video/${encodeURIComponent(it.id)}`;
-
-            const show = async () => {
-              video.style.display = 'block';
-              try {
-                await video.play();
-              } catch {
-                // Autoplay might be blocked (especially with sound). Controls still allow manual play.
-              }
-            };
-            const hide = () => {
-              try {
-                video.pause();
-              } catch {
-                // ignore
-              }
-              video.style.display = 'none';
-            };
-
-            td.addEventListener('mouseenter', () => void show());
-            td.addEventListener('mouseleave', () => hide());
-            video.style.display = 'none';
+            td.addEventListener('mouseenter', () => void this.showHoverVideoForItem(it.id, td));
+            td.addEventListener('mouseleave', () => this.scheduleHideHoverVideo(120));
           }
           continue;
         }
@@ -3000,9 +3155,29 @@ export class LibraryView extends ItemView {
           productLink.placeholder = 'https://…';
           productLink.value = meta.product_link ?? '';
           productLinkPills = td.createDiv({ cls: 'sxdb-meta-linkpills' });
+          if ((this.plugin.settings as any).libraryShowLinkChipActionButton !== false) {
+            const chipBtn = td.createEl('button', {
+              text: this.plugin.settings.libraryLinkChipActionLabel || 'Chipify',
+              cls: 'sxdb-link-chip-action'
+            });
+            chipBtn.addEventListener('click', (evt) => {
+              evt.preventDefault();
+              evt.stopPropagation();
+              normalizeLinksInput(productLink, productLinkPills);
+              void saveMeta();
+            });
+          }
           this.renderLinkPills(productLinkPills, this.parseLinksValue(productLink.value));
           productLink.addEventListener('input', () => {
-            if (productLinkPills) this.renderLinkPills(productLinkPills, this.parseLinksValue(productLink?.value ?? ''));
+            const links = this.parseLinksValue(productLink?.value ?? '');
+            markInvalid(productLink, links.some((u) => !this.validateUrlLike(u)));
+            if (productLinkPills) this.renderLinkPills(productLinkPills, links);
+          });
+          productLink.addEventListener('keydown', (evt) => {
+            if (!this.shouldCommitLinkChipOnKey(evt)) return;
+            evt.preventDefault();
+            normalizeLinksInput(productLink, productLinkPills);
+            void saveMeta();
           });
           continue;
         }
@@ -3014,9 +3189,29 @@ export class LibraryView extends ItemView {
           authorLinks.placeholder = 'https://a.com, https://b.com';
           authorLinks.value = this.parseLinksValue((meta as any).author_links).join(', ');
           authorLinksPills = td.createDiv({ cls: 'sxdb-meta-linkpills' });
+          if ((this.plugin.settings as any).libraryShowLinkChipActionButton !== false) {
+            const chipBtn = td.createEl('button', {
+              text: this.plugin.settings.libraryLinkChipActionLabel || 'Chipify',
+              cls: 'sxdb-link-chip-action'
+            });
+            chipBtn.addEventListener('click', (evt) => {
+              evt.preventDefault();
+              evt.stopPropagation();
+              normalizeLinksInput(authorLinks, authorLinksPills);
+              void saveMeta();
+            });
+          }
           this.renderLinkPills(authorLinksPills, this.parseLinksValue(authorLinks.value));
           authorLinks.addEventListener('input', () => {
-            if (authorLinksPills) this.renderLinkPills(authorLinksPills, this.parseLinksValue(authorLinks?.value ?? ''));
+            const links = this.parseLinksValue(authorLinks?.value ?? '');
+            markInvalid(authorLinks, links.some((u) => !this.validateUrlLike(u)));
+            if (authorLinksPills) this.renderLinkPills(authorLinksPills, links);
+          });
+          authorLinks.addEventListener('keydown', (evt) => {
+            if (!this.shouldCommitLinkChipOnKey(evt)) return;
+            evt.preventDefault();
+            normalizeLinksInput(authorLinks, authorLinksPills);
+            void saveMeta();
           });
           continue;
         }
@@ -3037,9 +3232,29 @@ export class LibraryView extends ItemView {
           postUrl.placeholder = 'https://…';
           postUrl.value = meta.post_url ?? '';
           postUrlPills = td.createDiv({ cls: 'sxdb-meta-linkpills' });
+          if ((this.plugin.settings as any).libraryShowLinkChipActionButton !== false) {
+            const chipBtn = td.createEl('button', {
+              text: this.plugin.settings.libraryLinkChipActionLabel || 'Chipify',
+              cls: 'sxdb-link-chip-action'
+            });
+            chipBtn.addEventListener('click', (evt) => {
+              evt.preventDefault();
+              evt.stopPropagation();
+              normalizeLinksInput(postUrl, postUrlPills);
+              void saveMeta();
+            });
+          }
           this.renderLinkPills(postUrlPills, this.parseLinksValue(postUrl.value));
           postUrl.addEventListener('input', () => {
-            if (postUrlPills) this.renderLinkPills(postUrlPills, this.parseLinksValue(postUrl?.value ?? ''));
+            const links = this.parseLinksValue(postUrl?.value ?? '');
+            markInvalid(postUrl, links.some((u) => !this.validateUrlLike(u)));
+            if (postUrlPills) this.renderLinkPills(postUrlPills, links);
+          });
+          postUrl.addEventListener('keydown', (evt) => {
+            if (!this.shouldCommitLinkChipOnKey(evt)) return;
+            evt.preventDefault();
+            normalizeLinksInput(postUrl, postUrlPills);
+            void saveMeta();
           });
           continue;
         }
@@ -3074,6 +3289,28 @@ export class LibraryView extends ItemView {
         }
       }
 
+      tr.querySelectorAll('td').forEach((cell) => {
+        const td = cell as HTMLTableCellElement;
+        const col = String(td.getAttr('data-col') || '').trim();
+        if (!col || col === 'index') return;
+
+        td.addEventListener('click', (evt) => {
+          const target = evt.target as HTMLElement | null;
+          if (target?.closest('input,button,a,textarea,select,video,.sxdb-row-resizer')) return;
+          evt.preventDefault();
+          evt.stopPropagation();
+          this.tableSelectedAll = applyCellSingleSelection(
+            this.selectedCells,
+            this.selectedRows,
+            this.selectedCols,
+            this.tableSelectedAll,
+            it.id,
+            col
+          );
+          this.updateSelectionClasses(table);
+        });
+      });
+
       const pinnedTargetPath = this.activePinnedPathForId(it.id);
       const updatePinnedUi = () => {
         const af = this.app.vault.getAbstractFileByPath(pinnedTargetPath);
@@ -3091,6 +3328,24 @@ export class LibraryView extends ItemView {
       updatePinnedUi();
 
       const saveMeta = async () => {
+        const ratingNum = rating?.value ? Number(rating.value) : null;
+        const ratingInvalid = ratingNum != null && (!Number.isFinite(ratingNum) || ratingNum < 0 || ratingNum > 5 || Math.floor(ratingNum) !== ratingNum);
+        markInvalid(rating, ratingInvalid);
+
+        const productLinks = this.parseLinksValue(productLink?.value ?? '');
+        const authorLinksValue = this.parseLinksValue(authorLinks?.value ?? '');
+        const postLinks = this.parseLinksValue(postUrl?.value ?? '');
+        const badProduct = productLinks.some((u) => !this.validateUrlLike(u));
+        const badAuthor = authorLinksValue.some((u) => !this.validateUrlLike(u));
+        const badPost = postLinks.some((u) => !this.validateUrlLike(u));
+        markInvalid(productLink, badProduct);
+        markInvalid(authorLinks, badAuthor);
+        markInvalid(postUrl, badPost);
+        if (ratingInvalid || badProduct || badAuthor || badPost) {
+          new Notice('Please fix invalid fields (rating must be 0-5; links must be valid URLs).');
+          return;
+        }
+
         const payload: any = {
           status: meta.status ?? null,
           statuses: Array.isArray((meta as any).statuses) ? (meta as any).statuses : (meta.status ? [meta.status] : null),
@@ -3106,14 +3361,14 @@ export class LibraryView extends ItemView {
         };
 
         // statusSel removed (multi-choice status editor writes into meta.status/meta.statuses)
-        if (rating) payload.rating = rating.value ? Number(rating.value) : null;
+        if (rating) payload.rating = ratingNum;
         if (tags) payload.tags = tags.value.trim() || null;
         if (notes) payload.notes = notes.value.trim() || null;
-        if (productLink) payload.product_link = productLink.value.trim() || null;
-        if (authorLinks) payload.author_links = this.parseLinksValue(authorLinks.value);
+        if (productLink) payload.product_link = productLinks[0] ?? (productLink.value.trim() || null);
+        if (authorLinks) payload.author_links = authorLinksValue;
         if (platformTargets) payload.platform_targets = platformTargets.value.trim() || null;
         if (workflowLog) payload.workflow_log = workflowLog.value.trim() || null;
-        if (postUrl) payload.post_url = postUrl.value.trim() || null;
+        if (postUrl) payload.post_url = postLinks[0] ?? (postUrl.value.trim() || null);
         if (publishedTime) payload.published_time = publishedTime.value.trim() || null;
 
         try {
@@ -3254,5 +3509,6 @@ export class LibraryView extends ItemView {
 
     // Apply freeze panes (sticky columns/rows) after the table is populated.
     window.requestAnimationFrame(() => this.applyFreezePanes(table, visibleKeys));
+    this.updateSelectionClasses(table);
   }
 }

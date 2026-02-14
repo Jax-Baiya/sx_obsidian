@@ -1,5 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting, TFile, TFolder, normalizePath, requestUrl } from 'obsidian';
 import type SxDbPlugin from './main';
+import { WORKFLOW_STATUSES } from './libraryCore';
 
 export interface SxDbSettings {
   apiBaseUrl: string;
@@ -46,9 +47,19 @@ export interface SxDbSettings {
   // SX Library view UX
   libraryHoverVideoPreview: boolean;
   libraryHoverPreviewMuted: boolean;
+  /**
+   * Hover video size mode:
+   * - scale: preserve TikTok-like base ratio and scale up/down by percentage.
+   * - free: use explicit width/height values.
+   */
+  libraryHoverVideoResizeMode: 'scale' | 'free';
+  libraryHoverVideoScalePct: number;
   libraryHoverPreviewWidth: number;
   libraryHoverPreviewHeight: number;
   libraryLinkCopyModifier: 'ctrl-cmd' | 'alt' | 'shift';
+  libraryShowLinkChipActionButton: boolean;
+  libraryLinkChipActionLabel: string;
+  libraryLinkChipCommitOn: 'tab' | 'enter' | 'both';
 
   // SX Library: ID column UX
   libraryIdWrapMode: 'wrap' | 'ellipsis' | 'clip';
@@ -130,10 +141,15 @@ export const DEFAULT_SETTINGS: SxDbSettings = {
   libraryHoverVideoPreview: true,
   // Default: unmuted (requested), but note some systems may still block autoplay with sound.
   libraryHoverPreviewMuted: false,
+  libraryHoverVideoResizeMode: 'scale',
+  libraryHoverVideoScalePct: 100,
   // Default: portrait hover preview (roughly 9:16), “mini TikTok” sized.
   libraryHoverPreviewWidth: 240,
   libraryHoverPreviewHeight: 426,
   libraryLinkCopyModifier: 'ctrl-cmd',
+  libraryShowLinkChipActionButton: true,
+  libraryLinkChipActionLabel: 'Chipify',
+  libraryLinkChipCommitOn: 'tab',
 
   libraryIdWrapMode: 'ellipsis',
   libraryIdCtrlHoverPreview: true,
@@ -158,6 +174,7 @@ export const DEFAULT_SETTINGS: SxDbSettings = {
   },
 
   libraryColumns: {
+    index: true,
     thumb: true,
     id: true,
     author: true,
@@ -176,6 +193,7 @@ export const DEFAULT_SETTINGS: SxDbSettings = {
   },
 
   libraryColumnOrder: [
+    'index',
     'thumb',
     'id',
     'author',
@@ -194,8 +212,6 @@ export const DEFAULT_SETTINGS: SxDbSettings = {
   ],
   libraryColumnWidths: {}
 };
-
-const WORKFLOW_STATUSES = ['raw', 'reviewing', 'reviewed', 'scheduling', 'scheduled', 'published', 'archived'];
 
 function slugFolderName(s: string): string {
   const v = (s || '').trim().toLowerCase();
@@ -989,8 +1005,8 @@ export class SxDbSettingTab extends PluginSettingTab {
 
       el.createEl('h4', { text: 'ID column' });
       new Setting(el)
-        .setName('ID wrapping')
-        .setDesc('Controls how long IDs are displayed in the SX Library table.')
+        .setName('Table cell wrapping')
+        .setDesc('Controls wrapping/overflow behavior across SX Library table cells (except action buttons).')
         .addDropdown((dd) => {
           dd.addOption('ellipsis', 'Overflow: ellipsis');
           dd.addOption('clip', 'Overflow: clip');
@@ -1108,7 +1124,28 @@ export class SxDbSettingTab extends PluginSettingTab {
 
       new Setting(el)
         .setName('SX Library: hover preview size')
-        .setDesc('Width/height in pixels for the hover video overlay.')
+        .setDesc('Choose either ratio-preserving scale (from TikTok-like default) or free width/height size.')
+        .addDropdown((dd) => {
+          dd.addOption('scale', 'Scale from TikTok default ratio');
+          dd.addOption('free', 'Free width/height');
+          dd.setValue((this.plugin.settings as any).libraryHoverVideoResizeMode || 'scale');
+          dd.onChange(async (v) => {
+            const next = v === 'free' ? 'free' : 'scale';
+            (this.plugin.settings as any).libraryHoverVideoResizeMode = next;
+            await this.plugin.saveSettings();
+            this.display();
+          });
+        })
+        .addText((text) =>
+          text
+            .setPlaceholder('scale %')
+            .setValue(String((this.plugin.settings as any).libraryHoverVideoScalePct ?? 100))
+            .onChange(async (v) => {
+              const n = Number(v);
+              (this.plugin.settings as any).libraryHoverVideoScalePct = Number.isFinite(n) ? Math.max(40, Math.min(300, Math.floor(n))) : 100;
+              await this.plugin.saveSettings();
+            })
+        )
         .addText((text) =>
           text
             .setPlaceholder('width')
@@ -1141,6 +1178,44 @@ export class SxDbSettingTab extends PluginSettingTab {
           dd.onChange(async (v) => {
             const next = v === 'alt' || v === 'shift' ? (v as any) : 'ctrl-cmd';
             this.plugin.settings.libraryLinkCopyModifier = next;
+            await this.plugin.saveSettings();
+          });
+        });
+
+      new Setting(el)
+        .setName('Show smart-link action button')
+        .setDesc('Shows the per-field action button next to URL inputs. Disable for a cleaner table UI.')
+        .addToggle((toggle) =>
+          toggle.setValue(Boolean(this.plugin.settings.libraryShowLinkChipActionButton ?? true)).onChange(async (value) => {
+            this.plugin.settings.libraryShowLinkChipActionButton = value;
+            await this.plugin.saveSettings();
+          })
+        );
+
+      new Setting(el)
+        .setName('Smart-link action label')
+        .setDesc('Button text shown next to metadata URL inputs to convert values into clickable chips.')
+        .addText((text) =>
+          text
+            .setPlaceholder('Chipify')
+            .setValue(this.plugin.settings.libraryLinkChipActionLabel || 'Chipify')
+            .onChange(async (v) => {
+              this.plugin.settings.libraryLinkChipActionLabel = String(v || '').trim() || 'Chipify';
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(el)
+        .setName('Smart-link commit key')
+        .setDesc('Pressing this key in URL inputs converts current value into smart chips.')
+        .addDropdown((dd) => {
+          dd.addOption('tab', 'Tab');
+          dd.addOption('enter', 'Enter');
+          dd.addOption('both', 'Tab or Enter');
+          dd.setValue(this.plugin.settings.libraryLinkChipCommitOn || 'tab');
+          dd.onChange(async (v) => {
+            const next = v === 'enter' || v === 'both' ? (v as any) : 'tab';
+            this.plugin.settings.libraryLinkChipCommitOn = next;
             await this.plugin.saveSettings();
           });
         });

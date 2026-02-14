@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 import re
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +26,7 @@ class MetaIn(BaseModel):
     tags: str | None = None
     notes: str | None = None
     product_link: str | None = None
+    author_links: list[str] | str | None = None
     platform_targets: str | None = None
     workflow_log: str | None = None
     post_url: str | None = None
@@ -210,6 +212,51 @@ def create_app(settings: Settings) -> FastAPI:
             if ranked:
                 return ranked[-1]
         return statuses[0]
+
+    def _normalize_url_list(v: object) -> list[str]:
+        """Accept list/JSON/csv/newline input and return de-duped URLs."""
+
+        if v is None:
+            return []
+
+        raw_items: list[str]
+        if isinstance(v, list):
+            raw_items = [str(x).strip() for x in v]
+        else:
+            s = str(v).strip()
+            if not s:
+                return []
+            # Try JSON array first.
+            if s.startswith("[") and s.endswith("]"):
+                try:
+                    obj = json.loads(s)
+                    if isinstance(obj, list):
+                        raw_items = [str(x).strip() for x in obj]
+                    else:
+                        raw_items = [s]
+                except Exception:
+                    raw_items = [p.strip() for p in re.split(r"[,\n]", s)]
+            else:
+                raw_items = [p.strip() for p in re.split(r"[,\n]", s)]
+
+        out: list[str] = []
+        seen: set[str] = set()
+        for x in raw_items:
+            if not x:
+                continue
+            if x in seen:
+                continue
+            seen.add(x)
+            out.append(x)
+        return out
+
+    def _pack_url_list(urls: list[str]) -> str | None:
+        if not urls:
+            return None
+        return json.dumps(urls, ensure_ascii=False)
+
+    def _unpack_url_list(raw: object) -> list[str]:
+        return _normalize_url_list(raw)
 
     def _parse_advanced_terms(raw: str) -> tuple[list[str], list[str]]:
         """Parse a simple "advanced" query string into include/exclude terms.
@@ -485,7 +532,7 @@ def create_app(settings: Settings) -> FastAPI:
             SELECT
               v.*, 
                             m.rating, m.status, m.statuses, m.tags, m.notes,
-                            m.product_link, m.platform_targets, m.workflow_log, m.post_url, m.published_time
+                                                        m.product_link, m.author_links, m.platform_targets, m.workflow_log, m.post_url, m.published_time
             FROM videos v
             LEFT JOIN user_meta m ON m.video_id = v.id
             WHERE v.id=?
@@ -774,7 +821,7 @@ def create_app(settings: Settings) -> FastAPI:
                             v.id, v.platform, v.author_id, v.author_unique_id, v.author_name, v.caption, v.bookmarked,
               v.video_path, v.cover_path, v.updated_at,
                             m.rating, m.status, m.statuses, m.tags, m.notes,
-                            m.product_link, m.platform_targets, m.workflow_log, m.post_url, m.published_time,
+                            m.product_link, m.author_links, m.platform_targets, m.workflow_log, m.post_url, m.published_time,
                             m.updated_at as meta_updated_at
             FROM videos v
             LEFT JOIN user_meta m ON m.video_id = v.id
@@ -807,6 +854,7 @@ def create_app(settings: Settings) -> FastAPI:
                 "tags": d.pop("tags"),
                 "notes": d.pop("notes"),
                 "product_link": d.pop("product_link"),
+                "author_links": _unpack_url_list(d.pop("author_links")),
                 "platform_targets": d.pop("platform_targets"),
                 "workflow_log": d.pop("workflow_log"),
                 "post_url": d.pop("post_url"),
@@ -821,7 +869,7 @@ def create_app(settings: Settings) -> FastAPI:
     def get_meta(item_id: str) -> dict:
         conn = _conn()
         row = conn.execute(
-            "SELECT video_id, rating, status, statuses, tags, notes, product_link, platform_targets, workflow_log, post_url, published_time, updated_at FROM user_meta WHERE video_id=?",
+            "SELECT video_id, rating, status, statuses, tags, notes, product_link, author_links, platform_targets, workflow_log, post_url, published_time, updated_at FROM user_meta WHERE video_id=?",
             (item_id,),
         ).fetchone()
         if not row:
@@ -834,6 +882,7 @@ def create_app(settings: Settings) -> FastAPI:
                     "tags": None,
                     "notes": None,
                     "product_link": None,
+                    "author_links": [],
                     "platform_targets": None,
                     "workflow_log": None,
                     "post_url": None,
@@ -844,6 +893,7 @@ def create_app(settings: Settings) -> FastAPI:
 
         d = dict(row)
         d["statuses"] = _unpack_statuses(d.get("statuses"))
+        d["author_links"] = _unpack_url_list(d.get("author_links"))
         if not d["statuses"] and (d.get("status") or "").strip():
             d["statuses"] = [(d.get("status") or "").strip()]
         return {"meta": d}
@@ -867,48 +917,100 @@ def create_app(settings: Settings) -> FastAPI:
         packed_statuses = _pack_statuses(statuses_list)
         primary_status = _primary_status_from_list(statuses_list) or (meta.status or None)
 
+        provided_fields = set(getattr(meta, "model_fields_set", set()) or set())
+        author_links_was_provided = "author_links" in provided_fields
+        if author_links_was_provided:
+            author_links_list = _normalize_url_list(meta.author_links)
+        else:
+            existing_links_row = conn.execute(
+                "SELECT author_links FROM user_meta WHERE video_id=?",
+                (item_id,),
+            ).fetchone()
+            author_links_list = _unpack_url_list(existing_links_row[0] if existing_links_row else None)
+        packed_author_links = _pack_url_list(author_links_list)
+
+        author_row = conn.execute(
+            "SELECT author_unique_id, author_name FROM videos WHERE id=?",
+            (item_id,),
+        ).fetchone()
+        author_uid = str((author_row[0] if author_row else "") or "").strip()
+        author_name = str((author_row[1] if author_row else "") or "").strip()
+
         conn.execute(
             """
-                        INSERT INTO user_meta(
-                            video_id, rating, status, statuses, tags, notes,
-                            product_link, platform_targets, workflow_log, post_url, published_time,
-                            updated_at
-                        )
-                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO user_meta(
+                video_id, rating, status, statuses, tags, notes,
+                product_link, author_links, platform_targets, workflow_log, post_url, published_time,
+                updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(video_id) DO UPDATE SET
               rating=excluded.rating,
               status=excluded.status,
               statuses=excluded.statuses,
               tags=excluded.tags,
               notes=excluded.notes,
-                            product_link=excluded.product_link,
-                            platform_targets=excluded.platform_targets,
-                            workflow_log=excluded.workflow_log,
-                            post_url=excluded.post_url,
-                            published_time=excluded.published_time,
+              product_link=excluded.product_link,
+              author_links=excluded.author_links,
+              platform_targets=excluded.platform_targets,
+              workflow_log=excluded.workflow_log,
+              post_url=excluded.post_url,
+              published_time=excluded.published_time,
               updated_at=excluded.updated_at
             """,
-                        (
-                                item_id,
-                                meta.rating,
-                                primary_status,
-                                packed_statuses,
-                                meta.tags,
-                                meta.notes,
-                                meta.product_link,
-                                meta.platform_targets,
-                                meta.workflow_log,
-                                meta.post_url,
-                                meta.published_time,
-                                now,
-                        ),
+            (
+                item_id,
+                meta.rating,
+                primary_status,
+                packed_statuses,
+                meta.tags,
+                meta.notes,
+                meta.product_link,
+                packed_author_links,
+                meta.platform_targets,
+                meta.workflow_log,
+                meta.post_url,
+                meta.published_time,
+                now,
+            ),
         )
+
+        # Author-scoped propagation: keep author_links consistent for all items by the same author.
+        # Priority: author_unique_id; fallback: author_name when unique_id is missing.
+        if author_links_was_provided and author_uid:
+            conn.execute(
+                """
+                INSERT INTO user_meta(video_id, author_links, updated_at)
+                SELECT v.id, ?, ?
+                FROM videos v
+                WHERE v.author_unique_id = ?
+                ON CONFLICT(video_id) DO UPDATE SET
+                  author_links=excluded.author_links,
+                  updated_at=excluded.updated_at
+                """,
+                (packed_author_links, now, author_uid),
+            )
+        elif author_links_was_provided and author_name:
+            conn.execute(
+                """
+                INSERT INTO user_meta(video_id, author_links, updated_at)
+                SELECT v.id, ?, ?
+                FROM videos v
+                WHERE (v.author_unique_id IS NULL OR TRIM(v.author_unique_id) = '')
+                  AND COALESCE(TRIM(v.author_name), '') = ?
+                ON CONFLICT(video_id) DO UPDATE SET
+                  author_links=excluded.author_links,
+                  updated_at=excluded.updated_at
+                """,
+                (packed_author_links, now, author_name),
+            )
         conn.commit()
 
         dumped = meta.model_dump()
         # Ensure response reflects normalized state.
         dumped["statuses"] = statuses_list
         dumped["status"] = primary_status
+        dumped["author_links"] = author_links_list
         out = {"video_id": item_id, **dumped, "updated_at": now}
         return {"meta": out}
 
@@ -1273,7 +1375,7 @@ def create_app(settings: Settings) -> FastAPI:
             SELECT
               v.*, 
                                                         m.rating, m.status, m.statuses, m.tags, m.notes,
-                            m.product_link, m.platform_targets, m.workflow_log, m.post_url, m.published_time
+                                                        m.product_link, m.author_links, m.platform_targets, m.workflow_log, m.post_url, m.published_time
             FROM videos v
             LEFT JOIN user_meta m ON m.video_id = v.id
             {where_sql}

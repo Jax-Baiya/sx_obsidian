@@ -670,6 +670,7 @@ def export_userdata(
                             tags,
                             notes,
                             product_link,
+                            author_links,
                             platform_targets,
                             workflow_log,
                             post_url,
@@ -793,13 +794,14 @@ def import_userdata(
                                                     tags,
                                                     notes,
                                                     product_link,
+                                                    author_links,
                                                     platform_targets,
                                                     workflow_log,
                                                     post_url,
                                                     published_time,
                                                     updated_at
                                                 )
-                                                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(video_id) DO UPDATE SET
                           rating=excluded.rating,
                           status=excluded.status,
@@ -807,6 +809,7 @@ def import_userdata(
                           tags=excluded.tags,
                           notes=excluded.notes,
                                                     product_link=excluded.product_link,
+                                                    author_links=excluded.author_links,
                                                     platform_targets=excluded.platform_targets,
                                                     workflow_log=excluded.workflow_log,
                                                     post_url=excluded.post_url,
@@ -821,6 +824,7 @@ def import_userdata(
                             obj.get("tags"),
                             obj.get("notes"),
                                                         obj.get("product_link"),
+                                                    obj.get("author_links"),
                                                         obj.get("platform_targets"),
                                                         obj.get("workflow_log"),
                                                         obj.get("post_url"),
@@ -840,13 +844,14 @@ def import_userdata(
                                                     tags,
                                                     notes,
                                                     product_link,
+                                                    author_links,
                                                     platform_targets,
                                                     workflow_log,
                                                     post_url,
                                                     published_time,
                                                     updated_at
                                                 )
-                                                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             vid,
@@ -856,6 +861,7 @@ def import_userdata(
                             obj.get("tags"),
                             obj.get("notes"),
                                                         obj.get("product_link"),
+                                                        obj.get("author_links"),
                                                         obj.get("platform_targets"),
                                                         obj.get("workflow_log"),
                                                         obj.get("post_url"),

@@ -264,6 +264,7 @@ def render_note(video: dict, *, resolver: PathResolver) -> str:
         # User-editable workflow fields (persist if present in input)
         "scheduled_time": video.get("scheduled_time"),
         "product_link": video.get("product_link"),
+        "author_links": _csv_or_json_list(video.get("author_links")),
         "tags": tags_list,
         # Optional legacy/compat fields (kept for dataview/metadata menu parity)
         "sx_select": bool(video.get("sx_select")) if video.get("sx_select") is not None else False,

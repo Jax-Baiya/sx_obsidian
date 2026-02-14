@@ -21,3 +21,14 @@ The recursive scan is depth-first. It extracts all numbers from a filename to fi
 
 ## Windows/WSL Metadata Cleanup
 The `deploy.sh` script automatically removes Windows `:Zone.Identifier` files which can sometimes cause permission or path processing issues in WSL. This is a standard cleanup step for cross-filesystem environments.
+
+## Future Updates Itinerary (Pending)
+
+The following features are intentionally deferred and tracked for future iterations:
+
+- **Event-based API log pruning policy** (beyond current daily rotation + retention), such as:
+	- prune logs after sustained healthy uptime,
+	- keep error-day logs longer than normal days,
+	- prune immediately after successful diagnostics export.
+- **Additional link interaction UX refinements**, including optional per-field copy/open behavior profiles.
+- **Further Active-only migration hardening**, including optional stricter legacy-folder warnings and guided cleanup steps.

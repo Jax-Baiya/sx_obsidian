@@ -19,9 +19,26 @@ jobs:
           python-version: '3.10'
           cache: 'pip'
 
+      - name: Install shell test tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck shfmt bats
+
       - name: Make scripts executable
         run: |
-          chmod +x deploy.sh run.sh
+          chmod +x deploy.sh run.sh sxctl.sh
+
+      - name: Shell lint
+        run: |
+          shellcheck sxctl.sh scripts/profile_adapter.sh scripts/install_plugin.sh scripts/build_plugin.sh deploy.sh run.sh
+
+      - name: Shell format check
+        run: |
+          shfmt -d sxctl.sh scripts/profile_adapter.sh scripts/install_plugin.sh scripts/build_plugin.sh deploy.sh run.sh
+
+      - name: Run bats tests
+        run: |
+          bats tests/shell/*.bats
 
       - name: Deploy (with dev deps)
         run: |

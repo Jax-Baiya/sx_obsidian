@@ -316,8 +316,15 @@ export default class SxDbPlugin extends Plugin {
   }
 
   private async openProjectDocsFromPlugin(): Promise<void> {
-    const preferred = String((this.settings as any).projectDocsPath || 'docs/USAGE.md').trim() || 'docs/USAGE.md';
-    const candidates = [preferred, 'docs/README.md', 'README.md'];
+    const preferred = String((this.settings as any).projectDocsPath || 'docs/user/README.md').trim() || 'docs/user/README.md';
+    const candidates = [
+      preferred,
+      'docs/user/README.md',
+      'docs/plugin/PLUGIN_DB.md',
+      'docs/plugin/SX_LIBRARY_FEATURES.md',
+      'docs/README.md',
+      'README.md'
+    ];
     for (const p of candidates) {
       const af = this.app.vault.getAbstractFileByPath(normalizePath(p));
       if (af && af instanceof TFile) {
@@ -326,6 +333,25 @@ export default class SxDbPlugin extends Plugin {
       }
     }
     new Notice('Project docs file not found in this vault. Try setting “Project docs file” in plugin settings.');
+  }
+
+  private async openPluginUserDocsFromPlugin(): Promise<void> {
+    const candidates = [
+      'docs/user/README.md',
+      'docs/plugin/PLUGIN_DB.md',
+      'docs/plugin/SX_LIBRARY_FEATURES.md',
+      String((this.settings as any).projectDocsPath || '').trim()
+    ].filter(Boolean);
+
+    for (const p of candidates) {
+      const af = this.app.vault.getAbstractFileByPath(normalizePath(p));
+      if (af && af instanceof TFile) {
+        await this.app.workspace.getLeaf(true).openFile(af);
+        return;
+      }
+    }
+
+    new Notice('Plugin user guide not found. Expected docs/user/README.md or docs/plugin/*.md in this vault.');
   }
 
   apiUrl(path: string, query: Record<string, string | number | boolean | null | undefined> = {}): string {
@@ -683,6 +709,14 @@ export default class SxDbPlugin extends Plugin {
       name: 'SX: Open project docs hub',
       callback: async () => {
         await this.openProjectDocsFromPlugin();
+      }
+    });
+
+    this.addCommand({
+      id: 'sxdb-open-plugin-user-docs',
+      name: 'SX: Open plugin user guide',
+      callback: async () => {
+        await this.openPluginUserDocsFromPlugin();
       }
     });
 

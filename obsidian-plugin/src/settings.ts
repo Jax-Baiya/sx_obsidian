@@ -142,7 +142,7 @@ export const DEFAULT_SETTINGS: SxDbSettings = {
   launcherProfileIndex: 1,
   backendServerTarget: 'local',
   backendCommandShell: 'bash',
-  projectDocsPath: 'docs/USAGE.md',
+  projectDocsPath: 'docs/user/README.md',
   activeNotesDir: '_db/media_active',
   bookmarksNotesDir: '_db/bookmarks',
   authorsNotesDir: '_db/authors',
@@ -1356,17 +1356,23 @@ export class SxDbSettingTab extends PluginSettingTab {
         .setDesc('Vault-relative docs landing page to open from the plugin.')
         .addText((text) =>
           text
-            .setPlaceholder('docs/USAGE.md')
-            .setValue(String((this.plugin.settings as any).projectDocsPath || 'docs/USAGE.md'))
+            .setPlaceholder('docs/user/README.md')
+            .setValue(String((this.plugin.settings as any).projectDocsPath || 'docs/user/README.md'))
             .onChange(async (v) => {
-              (this.plugin.settings as any).projectDocsPath = String(v || '').trim() || 'docs/USAGE.md';
+              (this.plugin.settings as any).projectDocsPath = String(v || '').trim() || 'docs/user/README.md';
               await this.plugin.saveSettings();
             })
         );
 
       new Setting(el)
         .setName('Open docs')
-        .setDesc('Open project docs (not just API endpoints).')
+        .setDesc('Open plugin-focused user guides directly from within Obsidian.')
+        .addButton((btn) =>
+          btn.setButtonText('Plugin user guide').setCta().onClick(() => {
+            const pid = this.plugin.manifest?.id || 'sx-obsidian-db';
+            (this.app as any).commands?.executeCommandById?.(`${pid}:sxdb-open-plugin-user-docs`);
+          })
+        )
         .addButton((btn) =>
           btn.setButtonText('Project docs').setCta().onClick(() => {
             const pid = this.plugin.manifest?.id || 'sx-obsidian-db';
@@ -1708,11 +1714,11 @@ export class SxDbSettingTab extends PluginSettingTab {
       new Setting(el)
         .setName('Pinned Note Peek: preview engine')
         .setDesc(
-          'Choose how Peek opens notes. “Hover Editor” and “Popout” use Obsidian’s native note views (properties, reading/live preview), while “Inline” is SX’s lightweight renderer.'
+          'Choose how Peek opens notes. Inline now mounts a native Obsidian leaf inside the SX Peek window (supports Source/Reading mode toggle). Split opens in the right pane.'
         )
         .addDropdown((dd) => {
-          dd.addOption('inline', 'Inline (Hover Obsidian leaf)');
-          dd.addOption('split', 'Split tab (Obsidian leaf)');
+          dd.addOption('inline', 'Inline (SX window · native Obsidian leaf)');
+          dd.addOption('split', 'Inline (Obsidian leaf · right split, experimental)');
           dd.addOption('popout', 'Popout window (Obsidian leaf)');
           dd.setValue((this.plugin.settings as any).libraryNotePeekEngine || 'inline');
           dd.setDisabled(!Boolean(this.plugin.settings.libraryNotePeekEnabled));

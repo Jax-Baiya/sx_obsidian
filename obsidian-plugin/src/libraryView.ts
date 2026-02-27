@@ -48,8 +48,7 @@ import {
 } from './shared/notePreview';
 import {
   hasHoverEditorInstalled as hasHoverEditorInstalledShared,
-  hoverEditorCommandId as hoverEditorCommandIdShared,
-  openFileInHoverEditor as openFileInHoverEditorShared
+  hoverEditorCommandId as hoverEditorCommandIdShared
 } from './shared/hoverEditor';
 import {
   findVaultNotesForId as findVaultNotesForIdShared,
@@ -91,7 +90,9 @@ export class LibraryView extends ItemView {
 
 
   // Experimental: Obsidian leaf embedded inside the inline Note Peek window.
+  private notePeekLeafOrigParent: Node | null = null;
   private notePeekLeafOrigNextSibling: ChildNode | null = null;
+  private notePeekInlineLeaf: WorkspaceLeaf | null = null;
   private notePeekEl: HTMLDivElement | null = null;
   private notePeekHeaderEl: HTMLDivElement | null = null;
   private notePeekBodyEl: HTMLDivElement | null = null;
@@ -175,10 +176,6 @@ export class LibraryView extends ItemView {
 
   private hasHoverEditorInstalled(): boolean {
     return hasHoverEditorInstalledShared(this.app);
-  }
-
-  private async openFileInHoverEditor(file: TFile): Promise<void> {
-    await openFileInHoverEditorShared(this.app, file);
   }
 
   private openProtocolOrUrl(link: string): void {
@@ -1057,6 +1054,7 @@ export class LibraryView extends ItemView {
   }
 
   private closeNotePeek(): void {
+    this.restoreInlineNotePeekLeaf();
     if (this.notePeekEl) {
       try {
         this.notePeekEl.remove();
@@ -1068,6 +1066,121 @@ export class LibraryView extends ItemView {
     this.notePeekHeaderEl = null;
     this.notePeekBodyEl = null;
     this.notePeekState = null;
+  }
+
+  private getStoredNotePeekInlineLeaf(): WorkspaceLeaf | null {
+    return ((this.plugin as any)._sxdbNotePeekInlineLeaf as WorkspaceLeaf | null) ?? null;
+  }
+
+  private setStoredNotePeekInlineLeaf(leaf: WorkspaceLeaf | null): void {
+    (this.plugin as any)._sxdbNotePeekInlineLeaf = leaf;
+  }
+
+  private getInlineLeafContainerEl(leaf: WorkspaceLeaf | null): HTMLElement | null {
+    if (!leaf) return null;
+    try {
+      const viewEl = (leaf as any)?.view?.containerEl as HTMLElement | null | undefined;
+      if (viewEl && viewEl instanceof HTMLElement) return viewEl;
+      const leafEl = (leaf as any)?.containerEl as HTMLElement | null | undefined;
+      if (leafEl && leafEl instanceof HTMLElement) return leafEl;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private restoreInlineNotePeekLeaf(): void {
+    const leaf = this.notePeekInlineLeaf;
+    if (!leaf) return;
+
+    const el = this.getInlineLeafContainerEl(leaf);
+    if (!el || !el.isConnected) {
+      this.notePeekInlineLeaf = null;
+      this.setStoredNotePeekInlineLeaf(null);
+      return;
+    }
+
+    if (this.notePeekLeafOrigParent) {
+      try {
+        this.notePeekLeafOrigParent.insertBefore(el, this.notePeekLeafOrigNextSibling);
+      } catch {
+        // ignore
+      }
+    }
+
+    this.notePeekLeafOrigParent = null;
+    this.notePeekLeafOrigNextSibling = null;
+  }
+
+  private async ensureInlineNotePeekLeaf(): Promise<WorkspaceLeaf> {
+    let leaf = this.getStoredNotePeekInlineLeaf();
+    if (!this.isLeafValid(leaf)) leaf = null;
+
+    if (!leaf) {
+      const ws: any = this.app.workspace as any;
+      const created: WorkspaceLeaf | null = (ws.getLeaf?.('split') as WorkspaceLeaf | null) ?? null;
+      leaf = created ?? this.app.workspace.getLeaf(true);
+      this.setStoredNotePeekInlineLeaf(leaf);
+    }
+
+    this.notePeekInlineLeaf = leaf;
+    return leaf;
+  }
+
+  private mountInlineNotePeekLeaf(leaf: WorkspaceLeaf): boolean {
+    const host = this.notePeekBodyEl;
+    if (!host) return false;
+
+    const el = this.getInlineLeafContainerEl(leaf);
+    if (!el) return false;
+
+    const parent = el.parentNode;
+    if (parent) {
+      this.notePeekLeafOrigParent = parent;
+      this.notePeekLeafOrigNextSibling = el.nextSibling;
+    }
+
+    host.empty();
+    host.appendChild(el);
+    this.notePeekEl?.addClass('sxdb-notepeek-hasleaf');
+    return true;
+  }
+
+  private async setLeafMode(leaf: WorkspaceLeaf, mode: 'source' | 'preview'): Promise<void> {
+    try {
+      const view: any = (leaf as any)?.view;
+      const next = mode === 'source' ? 'source' : 'preview';
+
+      if (typeof view?.setMode === 'function') {
+        const result = view.setMode(next);
+        if (result && typeof (result as Promise<unknown>).then === 'function') {
+          await result;
+        }
+        return;
+      }
+
+      if (typeof view?.toggleMode === 'function') {
+        const current = String(typeof view?.getMode === 'function' ? view.getMode() : 'preview');
+        if (current !== next) {
+          const result = view.toggleMode();
+          if (result && typeof (result as Promise<unknown>).then === 'function') {
+            await result;
+          }
+        }
+      }
+    } catch {
+      // best-effort
+    }
+  }
+
+  private async openFileInRightSplit(file: TFile): Promise<void> {
+    const prior = Boolean(this.plugin.settings.openAfterPinSplit);
+    (this.plugin.settings as any).openAfterPinSplit = true;
+    try {
+      await openPinnedFile(this.plugin, file);
+    } finally {
+      (this.plugin.settings as any).openAfterPinSplit = prior;
+    }
   }
 
 
@@ -1088,7 +1201,6 @@ export class LibraryView extends ItemView {
     const title = header.createDiv({ cls: 'sxdb-notepeek-title', text: 'Note Peek' });
     const headerBtns = header.createDiv({ cls: 'sxdb-notepeek-btns' });
     const modeBtn = headerBtns.createEl('button', { text: this.notePeekMode === 'source' ? 'Preview' : 'Source' });
-    const hoverBtn = this.hasHoverEditorInstalled() ? headerBtns.createEl('button', { text: 'Hover' }) : null;
     const openBtn = headerBtns.createEl('button', { text: 'Open' });
     const closeBtn = headerBtns.createEl('button', { text: '×' });
 
@@ -1120,15 +1232,6 @@ export class LibraryView extends ItemView {
       modeBtn.setText(this.notePeekMode === 'source' ? 'Preview' : 'Source');
       const id = this.notePeekState?.id;
       if (id) void this.openNotePeekForId(id);
-    });
-
-    hoverBtn?.addEventListener('click', async () => {
-      const fp = this.notePeekState?.filePath;
-      if (!fp) return;
-      const af = this.app.vault.getAbstractFileByPath(fp);
-      if (af && af instanceof TFile) {
-        await this.openFileInHoverEditor(af);
-      }
     });
 
     openBtn.addEventListener('click', async () => {
@@ -1237,16 +1340,18 @@ export class LibraryView extends ItemView {
     const engine = this.notePeekEngine();
     
     if (engine === 'popout') {
+      this.closeNotePeek();
       await this.openFileInNotePeekPopout(file);
       return;
     }
     if (engine === 'split') {
-      // Use the dedicated splitting logic from leafUtils instead of getLeaf('split') which is often glitchy in newer Obsidian.
-      await openPinnedFile(this.plugin, file);
+      this.closeNotePeek();
+      // Experimental split behavior: force open into a right split leaf.
+      await this.openFileInRightSplit(file);
       return;
     }
 
-    // Inline mode uses SX lightweight renderer directly inside the draggable peek window.
+    // Inline mode: native Obsidian Markdown leaf mounted in SX draggable window.
     this.ensureNotePeek();
     if (!this.notePeekBodyEl || !this.notePeekState) {
       new Notice('Inline note peek could not be initialized.');
@@ -1258,19 +1363,17 @@ export class LibraryView extends ItemView {
     const title = this.notePeekEl?.querySelector('.sxdb-notepeek-title') as HTMLDivElement | null;
     if (title) title.setText(`Note Peek · ${id}`);
 
-    this.notePeekBodyEl.empty();
-
     try {
-      const md = await this.app.vault.read(file);
-      const parsed = this.extractFrontmatter(md);
-      if (this.notePeekMode === 'source') {
-        this.notePeekBodyEl.createEl('pre', { text: md });
-      } else {
-        const content = `${this.buildPeekPrelude(parsed.fm)}${parsed.body}`;
-        await MarkdownRenderer.render(this.app, content, this.notePeekBodyEl, file.path, this);
-        this.bindRenderedMetadataLinkBehavior(this.notePeekBodyEl);
+      const leaf = await this.ensureInlineNotePeekLeaf();
+      await leaf.openFile(file);
+      await this.setLeafMode(leaf, this.notePeekMode);
+      const mounted = this.mountInlineNotePeekLeaf(leaf);
+      if (!mounted) {
+        throw new Error('Unable to mount native note leaf in inline preview window.');
       }
     } catch (e: any) {
+      this.notePeekEl?.removeClass('sxdb-notepeek-hasleaf');
+      this.notePeekBodyEl.empty();
       this.notePeekBodyEl.createEl('pre', { text: `Failed to render note: ${String(e?.message ?? e)}` });
     }
 

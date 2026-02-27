@@ -67,7 +67,9 @@ rough_works00.md
 # dir
 dist/
 data/
-docs/assets/
+docs/assets/*
+!docs/assets/showcase/
+!docs/assets/showcase/*.png
 prisma/
 
 # Local visual/debug artifacts

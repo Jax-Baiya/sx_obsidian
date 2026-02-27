@@ -48,41 +48,41 @@ SX Obsidian keeps your vault fast by storing the heavy dataset in the database l
 
 ---
 
-## Achievement showcase (from `assets/`)
+## Achievement showcase (from `docs/assets/showcase/`)
 
 ### Featured snapshots
 
-| Milestone                        | Screenshot                                                                   |
-| -------------------------------- | ---------------------------------------------------------------------------- |
-| UI/Theme polish                  | ![Screenshot 2026-02-21 201847](assets/Screenshot%202026-02-21%20201847.png) |
-| Library interaction improvements | ![Screenshot 2026-02-21 202030](assets/Screenshot%202026-02-21%20202030.png) |
-| Data/flow visual validation      | ![Screenshot 2026-02-21 202145](assets/Screenshot%202026-02-21%20202145.png) |
-| Progress on advanced views       | ![Screenshot 2026-02-21 202301](assets/Screenshot%202026-02-21%20202301.png) |
-| Control-plane maturity           | ![Screenshot 2026-02-21 203523](assets/Screenshot%202026-02-21%20203523.png) |
-| Current achievement state        | ![Screenshot 2026-02-21 203615](assets/Screenshot%202026-02-21%20203615.png) |
+| Milestone                        | Screenshot                                          |
+| -------------------------------- | --------------------------------------------------- |
+| UI/Theme polish                  | ![Screenshot 03](docs/assets/showcase/screenshot-03.png) |
+| Library interaction improvements | ![Screenshot 08](docs/assets/showcase/screenshot-08.png) |
+| Data/flow visual validation      | ![Screenshot 12](docs/assets/showcase/screenshot-12.png) |
+| Progress on advanced views       | ![Screenshot 15](docs/assets/showcase/screenshot-15.png) |
+| Control-plane maturity           | ![Screenshot 18](docs/assets/showcase/screenshot-18.png) |
+| Current achievement state        | ![Screenshot 19](docs/assets/showcase/screenshot-19.png) |
 
 <details>
 <summary><strong>Full gallery (all captured progress screenshots)</strong></summary>
 
-- ![Screenshot 2026-02-21 041859](assets/Screenshot%202026-02-21%20041859.png)
-- ![Screenshot 2026-02-21 054803](assets/Screenshot%202026-02-21%20054803.png)
-- ![Screenshot 2026-02-21 201847](assets/Screenshot%202026-02-21%20201847.png)
-- ![Screenshot 2026-02-21 201917](assets/Screenshot%202026-02-21%20201917.png)
-- ![Screenshot 2026-02-21 201934](assets/Screenshot%202026-02-21%20201934.png)
-- ![Screenshot 2026-02-21 201951](assets/Screenshot%202026-02-21%20201951.png)
-- ![Screenshot 2026-02-21 202010](assets/Screenshot%202026-02-21%20202010.png)
-- ![Screenshot 2026-02-21 202030](assets/Screenshot%202026-02-21%20202030.png)
-- ![Screenshot 2026-02-21 202048](assets/Screenshot%202026-02-21%20202048.png)
-- ![Screenshot 2026-02-21 202101](assets/Screenshot%202026-02-21%20202101.png)
-- ![Screenshot 2026-02-21 202119](assets/Screenshot%202026-02-21%20202119.png)
-- ![Screenshot 2026-02-21 202145](assets/Screenshot%202026-02-21%20202145.png)
-- ![Screenshot 2026-02-21 202203](assets/Screenshot%202026-02-21%20202203.png)
-- ![Screenshot 2026-02-21 202217](assets/Screenshot%202026-02-21%20202217.png)
-- ![Screenshot 2026-02-21 202301](assets/Screenshot%202026-02-21%20202301.png)
-- ![Screenshot 2026-02-21 202337](assets/Screenshot%202026-02-21%20202337.png)
-- ![Screenshot 2026-02-21 203508](assets/Screenshot%202026-02-21%20203508.png)
-- ![Screenshot 2026-02-21 203523](assets/Screenshot%202026-02-21%20203523.png)
-- ![Screenshot 2026-02-21 203615](assets/Screenshot%202026-02-21%20203615.png)
+- ![Screenshot 01](docs/assets/showcase/screenshot-01.png)
+- ![Screenshot 02](docs/assets/showcase/screenshot-02.png)
+- ![Screenshot 03](docs/assets/showcase/screenshot-03.png)
+- ![Screenshot 04](docs/assets/showcase/screenshot-04.png)
+- ![Screenshot 05](docs/assets/showcase/screenshot-05.png)
+- ![Screenshot 06](docs/assets/showcase/screenshot-06.png)
+- ![Screenshot 07](docs/assets/showcase/screenshot-07.png)
+- ![Screenshot 08](docs/assets/showcase/screenshot-08.png)
+- ![Screenshot 09](docs/assets/showcase/screenshot-09.png)
+- ![Screenshot 10](docs/assets/showcase/screenshot-10.png)
+- ![Screenshot 11](docs/assets/showcase/screenshot-11.png)
+- ![Screenshot 12](docs/assets/showcase/screenshot-12.png)
+- ![Screenshot 13](docs/assets/showcase/screenshot-13.png)
+- ![Screenshot 14](docs/assets/showcase/screenshot-14.png)
+- ![Screenshot 15](docs/assets/showcase/screenshot-15.png)
+- ![Screenshot 16](docs/assets/showcase/screenshot-16.png)
+- ![Screenshot 17](docs/assets/showcase/screenshot-17.png)
+- ![Screenshot 18](docs/assets/showcase/screenshot-18.png)
+- ![Screenshot 19](docs/assets/showcase/screenshot-19.png)
 
 </details>
 

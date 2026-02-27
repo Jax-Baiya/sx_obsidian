@@ -1,238 +1,118 @@
-# SX Obsidian DB
+# SX Obsidian
 
 [![CI](https://github.com/Jax-Baiya/sx_obsidian/actions/workflows/ci.yml/badge.svg)](https://github.com/Jax-Baiya/sx_obsidian/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10-blue)
 ![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
 ![Obsidian](https://img.shields.io/badge/Obsidian-Desktop-purple)
 
-**A local-first SX library system for Obsidian**: SQLite + FastAPI API + an Obsidian plugin, with an optional CSV→Markdown generator.
+**Local-first media intelligence stack for Obsidian** — source-scoped backend, fast plugin UX, TUI control plane, and a new web control surface.
 
-If you’ve ever tried to shove 10k–50k generated notes into an Obsidian vault, you already know the pain: startup indexing storms, timeouts, and a vault that feels like it’s wading through syrup.
+---
 
-This project’s main goal is simple:
+## Why this exists
 
-> Keep Obsidian fast while still giving you a powerful “library browser” + a lightweight set of pinned, editable notes.
+Large media libraries (10k–50k+) can cripple vault responsiveness when represented as raw Markdown files.
 
-## Short introduction
+SX Obsidian keeps your vault fast by storing the heavy dataset in the database layer while exposing a curated active set inside Obsidian.
 
-This project lets you **search and curate a very large library** from inside Obsidian *without* generating tens of thousands of Markdown notes.
+---
 
-It does that by:
+## What we’ve achieved 🚀
 
-1. importing your CSV exports into **SQLite**,
-2. serving a local **FastAPI** backend on `localhost`,
-3. giving you an **Obsidian plugin UI** for search + a library table,
-4. letting you “pin” only a small active working set (e.g. `_db/media_active/`) into the vault.
+- ✅ **Source-scoped architecture** (no cross-profile bleed)
+- ✅ **FastAPI backend** with explicit source/profile guardrails
+- ✅ **Modularized Obsidian plugin** with restored rich library interactions
+- ✅ **TUI control plane** for API, import, DB, and settings workflows
+- ✅ **Web control plane scaffold** for library/queue/schedule/settings surfaces
+- ✅ **Expanded regression coverage + CI hardening**
+- ✅ **Operational runbooks and recovery workflows**
 
-## Technologies used
+---
 
-Backend:
+## Architecture at a glance
 
-- Python 3.10
-- FastAPI + Uvicorn
-- SQLite
+- **Core backend (`sx_db/`)**
+  - API + repository layer
+  - source registry and profile-aware resolution
+  - scheduler and recovery tooling
+- **Obsidian plugin (`obsidian-plugin/`)**
+  - SX Library table/search UX
+  - note pin/sync flows
+  - hover/note preview + metadata editing
+- **TUI (`sx_db/tui/`)**
+  - terminal-first operations and diagnostics
+- **Web (`web/`)**
+  - Next.js control plane scaffold
+- **Docs (`docs/`)**
+  - structured by architecture/developer/user/runbooks/governance
 
-Plugin:
+---
 
-- TypeScript
-- Obsidian Plugin API
-- esbuild (bundling)
+## Achievement showcase (from `assets/`)
 
-Tooling:
+### Featured snapshots
 
-- pytest (tests)
-- GitHub Actions CI (`.github/workflows/ci.yml`)
+| Milestone                        | Screenshot                                                                   |
+| -------------------------------- | ---------------------------------------------------------------------------- |
+| UI/Theme polish                  | ![Screenshot 2026-02-21 201847](assets/Screenshot%202026-02-21%20201847.png) |
+| Library interaction improvements | ![Screenshot 2026-02-21 202030](assets/Screenshot%202026-02-21%20202030.png) |
+| Data/flow visual validation      | ![Screenshot 2026-02-21 202145](assets/Screenshot%202026-02-21%20202145.png) |
+| Progress on advanced views       | ![Screenshot 2026-02-21 202301](assets/Screenshot%202026-02-21%20202301.png) |
+| Control-plane maturity           | ![Screenshot 2026-02-21 203523](assets/Screenshot%202026-02-21%20203523.png) |
+| Current achievement state        | ![Screenshot 2026-02-21 203615](assets/Screenshot%202026-02-21%20203615.png) |
 
-## What’s in the box
+<details>
+<summary><strong>Full gallery (all captured progress screenshots)</strong></summary>
 
-- **`sx_db/`** — SQLite + FastAPI service
-    - Imports CSV exports into a local DB
-    - Serves search, paging, media, and note-rendering endpoints
-- **`obsidian-plugin/`** — Obsidian community plugin
-    - Search modal + SX Library table view
-    - Pin notes into an “active” folder (e.g. `_db/media_active`)
-    - Edit user-owned metadata without touching source CSVs
-- **`sx/`** — generator workflow (CSV → Markdown)
-    - Idempotent sync into your vault
-    - Managed regions to protect manual edits
+- ![Screenshot 2026-02-21 041859](assets/Screenshot%202026-02-21%20041859.png)
+- ![Screenshot 2026-02-21 054803](assets/Screenshot%202026-02-21%20054803.png)
+- ![Screenshot 2026-02-21 201847](assets/Screenshot%202026-02-21%20201847.png)
+- ![Screenshot 2026-02-21 201917](assets/Screenshot%202026-02-21%20201917.png)
+- ![Screenshot 2026-02-21 201934](assets/Screenshot%202026-02-21%20201934.png)
+- ![Screenshot 2026-02-21 201951](assets/Screenshot%202026-02-21%20201951.png)
+- ![Screenshot 2026-02-21 202010](assets/Screenshot%202026-02-21%20202010.png)
+- ![Screenshot 2026-02-21 202030](assets/Screenshot%202026-02-21%20202030.png)
+- ![Screenshot 2026-02-21 202048](assets/Screenshot%202026-02-21%20202048.png)
+- ![Screenshot 2026-02-21 202101](assets/Screenshot%202026-02-21%20202101.png)
+- ![Screenshot 2026-02-21 202119](assets/Screenshot%202026-02-21%20202119.png)
+- ![Screenshot 2026-02-21 202145](assets/Screenshot%202026-02-21%20202145.png)
+- ![Screenshot 2026-02-21 202203](assets/Screenshot%202026-02-21%20202203.png)
+- ![Screenshot 2026-02-21 202217](assets/Screenshot%202026-02-21%20202217.png)
+- ![Screenshot 2026-02-21 202301](assets/Screenshot%202026-02-21%20202301.png)
+- ![Screenshot 2026-02-21 202337](assets/Screenshot%202026-02-21%20202337.png)
+- ![Screenshot 2026-02-21 203508](assets/Screenshot%202026-02-21%20203508.png)
+- ![Screenshot 2026-02-21 203523](assets/Screenshot%202026-02-21%20203523.png)
+- ![Screenshot 2026-02-21 203615](assets/Screenshot%202026-02-21%20203615.png)
 
-## Features
+</details>
 
-- **Fast local search** (search modal) and a **paged library table** (table view)
-- **Pin items into the vault** as Markdown notes (active working set)
-- **User-owned metadata** persisted in SQLite (rating/status/tags/notes, etc.)
-- **Multi-source library isolation** (same IDs can exist in different sources)
-- **Sync workflows**:
-    - DB → vault (fetch/pin notes)
-    - vault → DB (push edits back)
-- **Vault safety** defaults:
-    - generator logs default outside the vault to avoid indexing storms
-    - “active set” pattern to keep Obsidian responsive
+---
 
-## What users can do
-
-- Browse and filter the library from inside Obsidian
-- Pin items into a dedicated notes folder
-- Edit metadata fields and keep those edits stable across CSV re-imports
-- Preview media (cover/video) when paths exist and API can access them
-- Keep their vault fast by storing the full dataset in SQLite rather than files
-
-## Multi-source support
-
-The system now supports multiple isolated sources in one SQLite DB.
-
-- Every API request is scoped by `source_id`
-- The plugin sends source context automatically (`X-SX-Source-ID` + query fallback)
-- Backend can maintain a registry of sources and a default source
-- Duplicate item IDs are allowed across different sources
-
-### Plugin source selection
-
-In **Settings → Connection**:
-
-- set **Active source ID** manually, or
-- use **Source registry** controls to list/add/delete sources and set backend default.
-
-In **Settings → Config**:
-
-- choose launch profile index (`_N`)
-- set SchedulerX env path and sqlite DB naming template
-- choose pipeline DB mode/alias awareness (`LOCAL`/`SESSION`/`TRANSACTION`/`SQL`)
-- load SchedulerX profiles from backend and apply to launcher config
-
-Runtime backend mode can also be configured via `.env`:
-
-- `SX_DB_BACKEND_MODE=SQLITE` (default)
-- `SX_DB_BACKEND_MODE=POSTGRES_MIRROR` (safe workaround that mirrors selected PostgreSQL profile data into sqlite-compatible tables so plugin behavior stays unchanged)
-
-### API source endpoints
-
-- `GET /sources`
-- `POST /sources`
-- `PATCH /sources/{source_id}`
-- `POST /sources/{source_id}/activate`
-- `DELETE /sources/{source_id}`
-
-### CLI source commands
-
-- `python -m sx_db sources list`
-- `python -m sx_db sources add <id> --label "..."`
-- `python -m sx_db sources set-default <id>`
-- `python -m sx_db sources remove <id>`
-
-Source-scoped options are also available on key commands:
-
-- `python -m sx_db status --source <id>`
-- `python -m sx_db find "query" --source <id>`
-- `python -m sx_db import --source <id>`
-- `python -m sx_db export-userdata --source <id>`
-- `python -m sx_db import-userdata --source <id>`
-
-## Commands / keyboard shortcuts
-
-The plugin exposes Obsidian commands (Command Palette). You can bind hotkeys in:
-**Settings → Hotkeys**.
-
-Available commands (from `obsidian-plugin/src/main.ts`):
-
-- `SX: Search library`
-- `SX: Pin item by ID…`
-- `SX: Open library table`
-- `SX: Refresh library table`
-- `SX: Sync current library selection → vault`
-- `SX: Fetch notes (DB → vault) using Fetch settings`
-- `SX: Push notes (vault → DB) from _db folders`
-- `SX: Test API connection`
-- `SX: Open API docs`
-- `SX: Preview video for current note`
-- `SX: Open plugin settings`
-- Settings deep-links:
-    - `SX: Open settings → Connection tab`
-    - `SX: Open settings → Config tab`
-    - `SX: Open settings → Sync tab`
-    - `SX: Open settings → Fetch tab`
-    - `SX: Open settings → Backend tab`
-    - `SX: Open settings → Views tab`
-    - `SX: Open settings → Advanced tab`
-- Convenience:
-    - `SX: Copy backend command (sxctl api serve)`
-    - `SX: Copy backend command (python -m sx_db serve)`
-
-## Build process (how I built it)
-
-This repo is intentionally split into two layers:
-
-1) **Data layer** (SQLite + API)
-
-- CSV exports are imported into SQLite (`python -m sx_db import-csv`).
-- A FastAPI app (`sx_db/api.py`) exposes endpoints for:
-    - search (`/search`)
-    - paging/filtering (`/items`)
-    - rendering Markdown notes (`/items/{id}/note`)
-    - user meta persistence (`/items/{id}/meta`)
-    - media streaming (`/media/...`)
-
-2) **UX layer** (Obsidian plugin)
-
-- TypeScript sources live in `obsidian-plugin/src/`.
-- The build uses **esbuild** (`obsidian-plugin/esbuild.config.mjs`) to bundle into `obsidian-plugin/main.js`.
-- Installing the plugin is automated by `scripts/install_plugin.sh` (copies `manifest.json`, `main.js`, `styles.css` into your vault’s `.obsidian/plugins/` directory).
-
-## What I learned
-
-- How to design for **performance constraints** in Obsidian (file count is a real scaling limit).
-- How to separate **source-of-truth imports** (CSV) from **user-owned edits** (SQLite `user_meta`).
-- How to build a local-first developer experience with:
-    - one-command bootstrap (`make bootstrap`)
-    - CI that runs tests on every push/PR
-- How to ship a plugin UX that still outputs **plain Markdown** for compatibility.
-
-## How it could be improved
-
-- Add an API client layer in the plugin (typed SDK + shared models) to reduce duplicated URL building.
-- Add more integration tests for:
-    - plugin → API flows
-    - edge cases around media paths and Range requests
-- Improve search ranking and filtering UX (saved views, presets, better relevance).
-- Add a release pipeline (tagged builds + plugin distribution artifacts).
-- Add optional containerization for the API (Docker) for easier onboarding.
-
-
-
-## Quickstart (recommended): SQLite + API + Obsidian plugin ⭐
+## Quickstart
 
 ### 1) Bootstrap
 
 ```bash
 make bootstrap
-```
-
-This creates `.venv/`, installs Python deps, and runs `npm install` for the plugin.
-
-### 2) Configure
-
-```bash
 cp .env.example .env
 ```
 
-Edit `.env` to point at your vault and CSV exports.
-
-### 3) Import database
+### 2) Initialize and import
 
 ```bash
 make api-init
 make api-import
 ```
 
-### 4) Run the API
+### 3) Run backend
 
 ```bash
 make api-serve
 ```
 
-Default URL: `http://127.0.0.1:8123`
+Default: `http://127.0.0.1:8123`
 
-### 5) Build + install the plugin into your vault
+### 4) Build/install plugin
 
 ```bash
 export OBSIDIAN_VAULT_PATH=/path/to/your/vault
@@ -240,53 +120,44 @@ make plugin-build
 make plugin-install
 ```
 
-Or use the convenience launcher:
+Or:
 
 ```bash
 ./sxctl.sh plugin update
 ```
 
-Then enable **“SX Obsidian DB”** in Obsidian → Community plugins.
-
-## Quickstart (optional): CSV → Markdown generator
-
-If you want files generated directly into your vault:
+### 5) (Optional) Run web control plane
 
 ```bash
-./deploy.sh
-cp .env.example .env
-./run.sh --mode sync
+cd web
+npm install
+npm run dev
 ```
 
-## Documentation
+---
 
-Start here: **[`docs/README.md`](docs/README.md)**
+## Documentation map
 
-Most-used:
+Start with: [`docs/INDEX.md`](docs/INDEX.md)
 
-- [Usage Guide](docs/USAGE.md)
-- [sxctl CLI guide](docs/cli.md)
-- [SQLite + Plugin workflow](docs/PLUGIN_DB.md)
-- [API architecture](docs/API_ARCHITECTURE.md)
-- [Performance & large vault safety](docs/PERFORMANCE.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- Architecture: [`docs/architecture/`](docs/architecture)
+- Developer docs: [`docs/developer/`](docs/developer)
+- User docs: [`docs/user/`](docs/user)
+- Runbooks: [`docs/runbooks/`](docs/runbooks)
+- Governance: [`docs/governance/`](docs/governance)
 
+---
 
-## Development
+## Developer workflows
 
-- Run tests: `make test`
-- Python entrypoints:
-    - generator: `./run.sh ...` (wraps `python -m sx`)
-    - API/DB: `./.venv/bin/python -m sx_db ...`
-- Pre-commit (optional): `./.venv/bin/pre-commit run --all-files`
+- Plugin build: `cd obsidian-plugin && npm run build`
+- Focused test pass: `./.venv/bin/python -m pytest -q tests/test_sources_api.py tests/test_tui_api_control.py`
+- Full tests: `make test`
 
-## Security notes
+---
 
-This system is designed to be **local-only**.
+## Security & operational notes
 
-- Keep the API bound to `127.0.0.1` unless you *really* mean to expose it.
-- Do not put secrets in `.env` that you wouldn’t want on your machine.
-
-
-
-
+- Keep API local (`127.0.0.1`) unless explicitly intended.
+- Use explicit source/profile context for operational commands.
+- Follow governance safety rails in [`docs/governance/GIT_WORKFLOW_SAFETY.md`](docs/governance/GIT_WORKFLOW_SAFETY.md).

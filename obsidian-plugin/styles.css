@@ -69,6 +69,25 @@
   margin: 0 0 8px 0;
 }
 
+.sxdb-lib-routing-debug {
+  margin: -2px 0 8px 0;
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  line-height: 1.35;
+  opacity: 0.78;
+}
+
+.sxdb-lib-routing-debug.is-adjusted {
+  opacity: 0.9;
+  color: var(--text-accent);
+}
+
+.sxdb-lib-routing-debug.is-warning {
+  opacity: 0.95;
+  color: var(--text-warning);
+  font-weight: 600;
+}
+
 .sxdb-lib-toolbarrow {
   display: flex;
   gap: 10px;
@@ -368,6 +387,71 @@
   margin-top: 2px;
 }
 
+/* Settings: Source registry UX */
+.sxdb-source-picker-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  background: var(--background-secondary);
+  padding: 10px;
+  margin: 6px 0 12px 0;
+}
+
+.sxdb-source-muted {
+  font-size: 12px;
+  opacity: 0.82;
+  margin-bottom: 8px;
+}
+
+.sxdb-source-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.sxdb-source-row select,
+.sxdb-source-row input[type='text'] {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  padding: 6px 8px;
+}
+
+.sxdb-source-row button {
+  border-radius: 8px;
+}
+
+.sxdb-source-grid input[type='text'] {
+  min-width: 180px;
+  flex: 1 1 180px;
+}
+
+.sxdb-source-routing-badge {
+  margin: 6px 0 10px 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.sxdb-source-routing-badge.is-affirmed {
+  color: var(--text-success, #4caf50);
+  border-color: color-mix(in srgb, var(--text-success, #4caf50) 35%, var(--background-modifier-border));
+  background: color-mix(in srgb, var(--text-success, #4caf50) 8%, var(--background-secondary));
+}
+
+.sxdb-source-routing-badge.is-warning {
+  color: var(--text-warning);
+  border-color: color-mix(in srgb, var(--text-warning) 40%, var(--background-modifier-border));
+  background: color-mix(in srgb, var(--text-warning) 10%, var(--background-secondary));
+}
+
 /* Settings tabs */
 .sxdb-settings-tabs {
   display: flex;
@@ -530,6 +614,28 @@
   position: relative;
   width: 64px;
   min-width: 64px;
+}
+
+.sxdb-lib-thumb-missing {
+  position: absolute;
+  inset: auto 4px 4px 4px;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--text-error) 42%, var(--background-modifier-border));
+  background: color-mix(in srgb, var(--text-error) 14%, var(--background-secondary));
+  color: var(--text-error);
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 600;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.sxdb-lib-thumb-missing-state {
+  background: color-mix(in srgb, var(--text-error) 5%, transparent);
 }
 
 .sxdb-lib-hovervideo {
@@ -932,4 +1038,172 @@
 
 .sxdb-lib-actions-cell button.sxdb-pin-active:hover {
   filter: brightness(1.05);
+}
+
+/* ── Profiles tab: profile cards ────────────────────────────────── */
+.sxdb-profiles-host {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.sxdb-profiles-status {
+  font-size: 12px;
+  opacity: 0.75;
+  margin-top: 6px;
+}
+
+.sxdb-profiles-empty,
+.sxdb-profiles-error {
+  padding: 16px;
+  border-radius: 10px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  text-align: center;
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+.sxdb-profiles-error {
+  color: var(--text-error);
+  border-color: color-mix(in srgb, var(--text-error) 30%, var(--background-modifier-border));
+  background: color-mix(in srgb, var(--text-error) 5%, var(--background-secondary));
+}
+
+.sxdb-profile-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  background: var(--background-secondary);
+  padding: 14px 16px;
+  transition: border-color 0.15s ease;
+}
+
+.sxdb-profile-card:hover {
+  border-color: color-mix(in srgb, var(--interactive-accent) 40%, var(--background-modifier-border));
+}
+
+.sxdb-profile-header {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.sxdb-profile-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 6px;
+}
+
+.sxdb-profile-title {
+  font-weight: 600;
+  font-size: 14px;
+  flex: 1;
+}
+
+.sxdb-profile-source-id {
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  opacity: 0.7;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+}
+
+.sxdb-profile-section-label {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.85;
+  margin-top: 12px;
+  margin-bottom: 4px;
+  padding: 4px 0;
+  border-top: 1px dashed color-mix(in srgb, var(--background-modifier-border) 60%, transparent);
+}
+
+.sxdb-profile-card .setting-item {
+  border: none;
+  padding: 4px 0;
+}
+
+.sxdb-profile-card .setting-item-name {
+  font-size: 12px;
+}
+
+.sxdb-profile-card .setting-item-description {
+  font-size: 11px;
+}
+
+.sxdb-profile-card .setting-item input[type='text'] {
+  font-size: 12px;
+}
+
+.sxdb-profile-db-section {
+  margin-top: 4px;
+}
+
+.sxdb-profile-db-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.sxdb-profile-db-mode {
+  min-width: 110px;
+  opacity: 0.9;
+}
+
+.sxdb-profile-db-alias {
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.sxdb-profile-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.sxdb-profile-save-btn {
+  border-radius: 8px;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sxdb-profile-save-status {
+  font-size: 12px;
+  opacity: 0.85;
+  transition: opacity 0.2s ease;
+}
+
+.sxdb-status-ok {
+  color: var(--text-success, #4caf50);
+  font-weight: 600;
+}
+
+.sxdb-status-error {
+  color: var(--text-error);
+  font-weight: 600;
+}
+
+.sxdb-status-info {
+  opacity: 0.7;
 }

@@ -1,9 +1,19 @@
-import { App, Notice, PluginSettingTab, Setting, TFile, TFolder, normalizePath, requestUrl } from 'obsidian';
+import { App, Notice, PluginSettingTab, Setting, TFile, TFolder, normalizePath } from 'obsidian';
 import type SxDbPlugin from './main';
 import { WORKFLOW_STATUSES } from './libraryCore';
+import { copyToClipboard } from './shared/clipboard';
+import { clearMarkdownInFolder, collectMarkdownFiles, ensureFolder, slugFolderName } from './shared/vaultFs';
+import { DEFAULT_LIBRARY_COLUMNS, DEFAULT_LIBRARY_COLUMN_ORDER } from './librarySchema';
 
 export interface SxDbSettings {
   apiBaseUrl: string;
+  activeSourceId: string;
+  schemaIndexSafetyGuard: boolean;
+  enforceProfileSourceAlignment: boolean;
+  launcherProfileIndex: number;
+  backendServerTarget: 'local' | 'cloud-session' | 'cloud-transaction';
+  backendCommandShell: 'bash' | 'zsh' | 'sh' | 'powershell' | 'cmd';
+  projectDocsPath: string;
   activeNotesDir: string;
   bookmarksNotesDir: string;
   authorsNotesDir: string;
@@ -26,6 +36,7 @@ export interface SxDbSettings {
   fetchMode: 'bookmarks' | 'authors' | 'both';
   fetchBookmarkedOnly: boolean;
   fetchForceRegenerate: boolean;
+  localPathlinkerGroup1: string;
   fetchQuery: string;
   fetchAuthorUniqueId: string; // legacy single-select (kept for backward compat)
   fetchAuthorUniqueIds: string[]; // preferred multi-select
@@ -73,12 +84,11 @@ export interface SxDbSettings {
   libraryNotePeekEnabled: boolean;
   /**
    * How the pinned preview should be displayed.
-   * - inline: render markdown into SX's floating window (fast, self-contained)
-    * - inline-leaf: embed an Obsidian leaf inside the SX floating window (experimental)
-   * - hover-editor: open the note in Hover Editor's popover (Obsidian-native view; requires the plugin)
+   * - inline: open the note natively in a hover Obsidian leaf.
+   * - split: open the note in a split tab (Obsidian-native view).
    * - popout: open the note in an Obsidian popout window leaf (Obsidian-native view)
    */
-    libraryNotePeekEngine: 'inline' | 'inline-leaf' | 'hover-editor' | 'popout';
+    libraryNotePeekEngine: 'inline' | 'split' | 'popout';
   libraryNotePeekWidth: number;
   libraryNotePeekHeight: number;
 
@@ -105,10 +115,34 @@ export interface SxDbSettings {
   // SX Library columns: per-column visibility.
   // Keys correspond to internal column ids used by LibraryView.
   libraryColumns: Record<string, boolean>;
+
+  // Cached source profile configs (synced from API → .env).
+  profileConfigs: Record<number, {
+    label: string;
+    src_path: string;
+    source_id: string;
+    pathlinker_group: string;
+    group_name: string;
+    vault_name: string;
+    vault_path: string;
+    assets_path: string;
+  }>;
+
+  // Profiles tab scope behavior.
+  // - false (default): show only profile(s) matching active source id
+  // - true: troubleshooting override to show all profiles
+  profilesShowAll: boolean;
 }
 
 export const DEFAULT_SETTINGS: SxDbSettings = {
   apiBaseUrl: 'http://127.0.0.1:8123',
+  activeSourceId: 'default',
+  schemaIndexSafetyGuard: true,
+  enforceProfileSourceAlignment: true,
+  launcherProfileIndex: 1,
+  backendServerTarget: 'local',
+  backendCommandShell: 'bash',
+  projectDocsPath: 'docs/USAGE.md',
   activeNotesDir: '_db/media_active',
   bookmarksNotesDir: '_db/bookmarks',
   authorsNotesDir: '_db/authors',
@@ -127,6 +161,7 @@ export const DEFAULT_SETTINGS: SxDbSettings = {
   fetchMode: 'bookmarks',
   fetchBookmarkedOnly: true,
   fetchForceRegenerate: true,
+  localPathlinkerGroup1: '',
   fetchQuery: '',
   fetchAuthorUniqueId: '',
   fetchAuthorUniqueIds: [],
@@ -136,7 +171,7 @@ export const DEFAULT_SETTINGS: SxDbSettings = {
 
   autoPushOnEdit: true,
   autoPushDebounceMs: 1200,
-  autoPushLegacyFoldersInActiveOnly: true,
+  autoPushLegacyFoldersInActiveOnly: false,
 
   libraryHoverVideoPreview: true,
   // Default: unmuted (requested), but note some systems may still block autoplay with sound.
@@ -173,99 +208,13 @@ export const DEFAULT_SETTINGS: SxDbSettings = {
     authorSearch: ''
   },
 
-  libraryColumns: {
-    index: true,
-    thumb: true,
-    id: true,
-    author: true,
-    bookmarked: true,
-    status: true,
-    rating: true,
-    tags: true,
-    notes: true,
-    product_link: false,
-    author_links: false,
-    platform_targets: false,
-    post_url: false,
-    published_time: false,
-    workflow_log: false,
-    actions: true
-  },
+  libraryColumns: { ...DEFAULT_LIBRARY_COLUMNS },
 
-  libraryColumnOrder: [
-    'index',
-    'thumb',
-    'id',
-    'author',
-    'bookmarked',
-    'status',
-    'rating',
-    'tags',
-    'notes',
-    'product_link',
-    'author_links',
-    'platform_targets',
-    'post_url',
-    'published_time',
-    'workflow_log',
-    'actions'
-  ],
-  libraryColumnWidths: {}
+  libraryColumnOrder: [...DEFAULT_LIBRARY_COLUMN_ORDER],
+  libraryColumnWidths: {},
+  profilesShowAll: false,
+  profileConfigs: {}
 };
-
-function slugFolderName(s: string): string {
-  const v = (s || '').trim().toLowerCase();
-  const slug = v
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '');
-  return slug || 'unknown';
-}
-
-function collectMarkdownFiles(folder: TFolder): TFile[] {
-  const out: TFile[] = [];
-  const stack = [...folder.children];
-  while (stack.length) {
-    const f = stack.pop();
-    if (!f) continue;
-    if (f instanceof TFile) {
-      if (f.extension === 'md') out.push(f);
-    } else if (f instanceof TFolder) {
-      stack.push(...f.children);
-    }
-  }
-  return out;
-}
-
-async function ensureFolder(app: App, folderPath: string): Promise<TFolder> {
-  const existing = app.vault.getAbstractFileByPath(folderPath);
-  if (existing && existing instanceof TFolder) return existing;
-  await app.vault.createFolder(folderPath).catch(() => void 0);
-  const created = app.vault.getAbstractFileByPath(folderPath);
-  if (!created || !(created instanceof TFolder)) throw new Error(`Failed to create folder: ${folderPath}`);
-  return created;
-}
-
-async function clearMarkdownInFolder(app: App, folderPath: string): Promise<number> {
-  const root = app.vault.getAbstractFileByPath(folderPath);
-  if (!root || !(root instanceof TFolder)) return 0;
-  const files = collectMarkdownFiles(root);
-  let deleted = 0;
-  for (const f of files) {
-    await app.vault.delete(f);
-    deleted += 1;
-  }
-  return deleted;
-}
-
-async function copyToClipboard(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export class SxDbSettingTab extends PluginSettingTab {
   plugin: SxDbPlugin;
@@ -285,10 +234,9 @@ export class SxDbSettingTab extends PluginSettingTab {
     const panelsHost = containerEl.createDiv();
 
     const tabs: Array<{ id: string; label: string }> = [
-      { id: 'connection', label: 'Connection' },
-      { id: 'sync', label: 'Sync' },
-      { id: 'fetch', label: 'Fetch' },
-      { id: 'backend', label: 'Backend' },
+      { id: 'database', label: 'Database' },
+      { id: 'profiles', label: 'Profiles' },
+      { id: 'dataflow', label: 'Data Flow' },
       { id: 'views', label: 'Views' },
       { id: 'danger', label: 'Danger Zone' },
       { id: 'advanced', label: 'Advanced' }
@@ -318,13 +266,17 @@ export class SxDbSettingTab extends PluginSettingTab {
 
     // default / requested tab
     const requested = String((this.plugin as any).uiActiveSettingsTabId || '').trim();
-    const initial = tabs.some((t) => t.id === requested) ? requested : 'connection';
+    const initial = tabs.some((t) => t.id === requested) ? requested : 'database';
     activate(initial);
 
-    // ── Connection tab ──────────────────────────────────────────────────────
+    // ── Database tab: connection + schema/profile + backend launch ─────────
     {
-      const el = panels.connection;
-      el.createEl('h3', { text: 'Connection' });
+      const el = panels.database;
+      el.createEl('h3', { text: 'Database & Schema' });
+      el.createEl('p', {
+        text:
+          'All DB/schema/profile controls are centralized here to reduce cross-profile mistakes. The schema-index safety guard blocks writes when source/profile indexes don’t match.'
+      });
 
       new Setting(el)
         .setName('API base URL')
@@ -339,15 +291,328 @@ export class SxDbSettingTab extends PluginSettingTab {
             })
         );
 
+      const CUSTOM_SOURCE_OPTION = '__custom__';
+      const sourceChoices = new Set<string>([String((this.plugin.settings as any).activeSourceId || 'default') || 'default']);
+      const profileChoices = new Set<number>([Math.max(1, Number((this.plugin.settings as any).launcherProfileIndex || 1))]);
+      let activeProfileSelect: HTMLSelectElement | null = null;
+      let routingBadgeEl: HTMLDivElement | null = null;
+
+      const sanitizeSourceId = (raw: string): string => {
+        const cleaned = String(raw || '')
+          .trim()
+          .replace(/[^a-zA-Z0-9._-]/g, '');
+        return cleaned || 'default';
+      };
+
+      const parseTrailingProfileIndex = (value: string): number | null => {
+        const s = String(value || '').trim().toLowerCase();
+        if (!s) return null;
+        const m = s.match(/(?:^|[_-])(?:p)?(\d{1,2})$/);
+        if (!m) return null;
+        const n = Number(m[1]);
+        if (!Number.isFinite(n) || n < 1) return null;
+        return Math.floor(n);
+      };
+
+      const refreshRoutingBadge = () => {
+        if (!routingBadgeEl) return;
+        const routing = (this.plugin as any).getRoutingDebugInfo?.() || {};
+
+        const configuredProfile = Number(routing?.configuredProfile ?? (this.plugin.settings as any).launcherProfileIndex ?? 1);
+        const configuredSource = sanitizeSourceId(String(routing?.configuredSource || (this.plugin.settings as any).activeSourceId || 'default'));
+        const effectiveProfile = Number(routing?.effectiveProfile ?? configuredProfile);
+        const effectiveSource = sanitizeSourceId(String(routing?.effectiveSource || configuredSource));
+
+        const guardOn = Boolean((this.plugin.settings as any).schemaIndexSafetyGuard ?? true);
+        const alignOn = Boolean((this.plugin.settings as any).enforceProfileSourceAlignment ?? true);
+        const mismatch = Boolean(routing?.mismatchDetected ?? false);
+
+        const status = mismatch ? '⚠ mismatch' : '✅ affirmed';
+        routingBadgeEl.removeClass('is-affirmed', 'is-warning');
+        if (mismatch) routingBadgeEl.addClass('is-warning');
+        else routingBadgeEl.addClass('is-affirmed');
+        routingBadgeEl.setText(
+          `${status} · configured #${Math.max(1, configuredProfile)} → ${configuredSource} · effective #${Math.max(1, effectiveProfile)} → ${effectiveSource} · guard ${guardOn ? 'ON' : 'OFF'} · alignment ${alignOn ? 'ON' : 'OFF'}`
+        );
+      };
+
+      const profileSourceId = (idx: number): string => {
+        const n = Math.max(1, Math.floor(Number(idx) || 1));
+        const cached = (this.plugin.settings as any).profileConfigs?.[n];
+        const sid = sanitizeSourceId(String(cached?.source_id || `assets_${n}`));
+        return sid;
+      };
+
+      const refreshActiveProfileControl = () => {
+        if (!activeProfileSelect) return;
+
+        const current = Math.max(1, Number((this.plugin.settings as any).launcherProfileIndex || 1));
+        profileChoices.add(current);
+
+        // Add cached profile indexes when available.
+        const cached = (this.plugin.settings as any).profileConfigs || {};
+        for (const k of Object.keys(cached)) {
+          const n = Number(k);
+          if (Number.isFinite(n) && n >= 1) profileChoices.add(Math.floor(n));
+        }
+
+        const sorted = Array.from(profileChoices).sort((a, b) => a - b);
+        activeProfileSelect.empty();
+        for (const idx of sorted) {
+          const sid = profileSourceId(idx);
+          const label = String((this.plugin.settings as any).profileConfigs?.[idx]?.label || '').trim();
+          const text = `#${idx} → ${sid}${label ? ` (${label})` : ''}`;
+          activeProfileSelect.createEl('option', { value: String(idx), text });
+        }
+
+        activeProfileSelect.value = String(current);
+        if (!activeProfileSelect.value && activeProfileSelect.options.length) {
+          activeProfileSelect.value = activeProfileSelect.options[0].value;
+        }
+      };
+
+      const applyUnifiedProfileSelection = async (idx: number, opts?: { notify?: boolean }) => {
+        const n = Math.max(1, Math.floor(Number(idx) || 1));
+        const sid = profileSourceId(n);
+
+        (this.plugin.settings as any).launcherProfileIndex = n;
+        (this.plugin.settings as any).activeSourceId = sid;
+        // Reinforce safety invariants whenever user confirms active profile.
+        (this.plugin.settings as any).enforceProfileSourceAlignment = true;
+        (this.plugin.settings as any).schemaIndexSafetyGuard = true;
+
+        profileChoices.add(n);
+        sourceChoices.add(sid);
+
+        await this.plugin.saveSettings();
+        refreshActiveProfileControl();
+        refreshRoutingBadge();
+
+        if (opts?.notify) {
+          new Notice(`Active profile confirmed: #${n} (${sid})`);
+        }
+      };
+
+      new Setting(el)
+        .setName('Active source profile (single control)')
+        .setDesc('Primary selector. Choosing a profile automatically sets Profile index + Active source ID and re-enables schema safety guard + profile/source alignment.')
+        .addDropdown((dd) => {
+          activeProfileSelect = (dd as any).selectEl as HTMLSelectElement;
+          refreshActiveProfileControl();
+          dd.onChange(async (value) => {
+            const idx = Number(value);
+            if (!Number.isFinite(idx) || idx < 1) return;
+            await applyUnifiedProfileSelection(Math.floor(idx));
+          });
+        })
+        .addButton((btn) =>
+          btn.setButtonText('Affirm now').setCta().onClick(async () => {
+            const idx = Math.max(1, Number((this.plugin.settings as any).launcherProfileIndex || 1));
+            await applyUnifiedProfileSelection(idx, { notify: true });
+          })
+        )
+        .addButton((btn) =>
+          btn.setButtonText('Reload profiles').onClick(async () => {
+            try {
+              const resp = await (this.plugin as any).apiRequest({ path: '/pipeline/profiles' });
+              const data = resp.json as { profiles?: Array<{ index: number; source_id?: string; label?: string; src_path?: string; pathlinker_group?: string; group_name?: string; vault_name?: string; vault_path?: string; assets_path?: string }> };
+              const rows = Array.isArray(data?.profiles) ? data.profiles : [];
+              const cache: Record<number, any> = { ...(this.plugin.settings.profileConfigs || {}) };
+              for (const p of rows) {
+                const idx = Number(p?.index);
+                if (!Number.isFinite(idx) || idx < 1) continue;
+                profileChoices.add(Math.floor(idx));
+                const existing = cache[Math.floor(idx)] || {};
+                cache[Math.floor(idx)] = {
+                  ...existing,
+                  label: String(p?.label || existing.label || `profile_${Math.floor(idx)}`),
+                  src_path: String(p?.src_path || existing.src_path || ''),
+                  source_id: sanitizeSourceId(String(p?.source_id || existing.source_id || `assets_${Math.floor(idx)}`)),
+                  pathlinker_group: String(p?.pathlinker_group || existing.pathlinker_group || ''),
+                  group_name: String(p?.group_name || existing.group_name || ''),
+                  vault_name: String(p?.vault_name || existing.vault_name || ''),
+                  vault_path: String(p?.vault_path || existing.vault_path || ''),
+                  assets_path: String(p?.assets_path || existing.assets_path || '')
+                };
+              }
+              this.plugin.settings.profileConfigs = cache;
+              await this.plugin.saveSettings();
+              refreshActiveProfileControl();
+              refreshRoutingBadge();
+              new Notice(`Profiles reloaded (${rows.length}).`);
+            } catch (e: any) {
+              new Notice(`Reload profiles failed: ${String(e?.message ?? e)}`);
+            }
+          })
+        );
+
+      routingBadgeEl = el.createDiv({ cls: 'sxdb-source-routing-badge' });
+      refreshRoutingBadge();
+      refreshActiveProfileControl();
+
+      el.createEl('h4', { text: 'Source registry' });
+      el.createEl('p', {
+        text: 'Manage backend sources and switch active source without manually typing IDs.'
+      });
+
+      const sourceWrap = el.createDiv({ cls: 'sxdb-source-picker sxdb-source-picker-card' });
+      sourceWrap.createEl('div', {
+        cls: 'sxdb-source-muted',
+        text: 'Tip: pick a source below and set it active, or add a new source with a custom ID.'
+      });
+      const sourceRow = sourceWrap.createDiv({ cls: 'sxdb-source-row' });
+      const sourceSel = sourceRow.createEl('select');
+      sourceSel.style.minWidth = '260px';
+      const reloadBtn = sourceRow.createEl('button', { text: 'Reload' });
+      const activateBtn = sourceRow.createEl('button', { text: 'Set active' });
+      const removeBtn = sourceRow.createEl('button', { text: 'Delete' });
+
+      const createRow = sourceWrap.createDiv({ cls: 'sxdb-source-row sxdb-source-grid' });
+      const idInput = createRow.createEl('input', { type: 'text', placeholder: 'source id' });
+      const labelInput = createRow.createEl('input', { type: 'text', placeholder: 'label (optional)' });
+      const addBtn = createRow.createEl('button', { text: 'Add source' });
+      const makeDefaultBtn = createRow.createEl('button', { text: 'Set backend default' });
+
+      let selectedSourceId = String((this.plugin.settings as any).activeSourceId || 'default');
+
+      const loadSources = async () => {
+        sourceSel.empty();
+        sourceChoices.clear();
+        try {
+          const resp = await (this.plugin as any).apiRequest({ path: '/sources' });
+          const data = resp.json as {
+            sources?: Array<{ id: string; label?: string | null; is_default?: number | boolean }>;
+            default_source_id?: string;
+          };
+          const rows = Array.isArray(data?.sources) ? data.sources : [];
+
+          if (!rows.length) {
+            const fallback = sanitizeSourceId(this.plugin.getActiveSourceId());
+            sourceChoices.add(fallback);
+            sourceSel.createEl('option', { value: fallback, text: fallback });
+            sourceSel.value = fallback;
+            selectedSourceId = sourceSel.value;
+            refreshRoutingBadge();
+            return;
+          }
+
+          for (const s of rows) {
+            const sid = String(s?.id || '').trim();
+            if (!sid) continue;
+            sourceChoices.add(sid);
+            const label = String(s?.label || '').trim();
+            const isDef = Boolean(Number(s?.is_default || 0));
+            const text = `${sid}${label && label !== sid ? ` — ${label}` : ''}${isDef ? '  (default)' : ''}`;
+            sourceSel.createEl('option', { value: sid, text });
+          }
+
+          const desired = sanitizeSourceId(String((this.plugin.settings as any).activeSourceId || data?.default_source_id || 'default'));
+          sourceChoices.add(desired);
+          sourceSel.value = desired;
+          if (!sourceSel.value && sourceSel.options.length) sourceSel.value = sourceSel.options[0].value;
+          selectedSourceId = sourceSel.value || desired;
+          refreshRoutingBadge();
+        } catch {
+          const fallback = sanitizeSourceId(this.plugin.getActiveSourceId());
+          sourceChoices.add(fallback);
+          sourceSel.createEl('option', { value: fallback, text: fallback });
+          sourceSel.value = fallback;
+          selectedSourceId = sourceSel.value;
+          refreshRoutingBadge();
+        }
+      };
+
+      sourceSel.addEventListener('change', () => {
+        selectedSourceId = String(sourceSel.value || '').trim() || 'default';
+      });
+
+      reloadBtn.addEventListener('click', () => {
+        void loadSources();
+      });
+
+      activateBtn.addEventListener('click', async () => {
+        const sid = String(selectedSourceId || sourceSel.value || '').trim();
+        if (!sid) return;
+        const clean = sanitizeSourceId(sid);
+        (this.plugin.settings as any).activeSourceId = clean;
+        const sourceIdx = parseTrailingProfileIndex(clean);
+        if (sourceIdx != null) {
+          (this.plugin.settings as any).launcherProfileIndex = sourceIdx;
+          profileChoices.add(sourceIdx);
+        }
+        sourceChoices.add(clean);
+        await this.plugin.saveSettings();
+        refreshActiveProfileControl();
+        refreshRoutingBadge();
+        new Notice(`Active source set: ${clean}${sourceIdx != null ? ` (profile #${sourceIdx})` : ''}`);
+      });
+
+      removeBtn.addEventListener('click', async () => {
+        const sid = String(selectedSourceId || sourceSel.value || '').trim();
+        if (!sid) return;
+        try {
+          await (this.plugin as any).apiRequest({ path: `/sources/${encodeURIComponent(sid)}`, method: 'DELETE' });
+          if (String((this.plugin.settings as any).activeSourceId || '') === sid) {
+            (this.plugin.settings as any).activeSourceId = 'default';
+            await this.plugin.saveSettings();
+          }
+          await loadSources();
+          new Notice(`Deleted source: ${sid}`);
+        } catch (e: any) {
+          new Notice(`Delete failed: ${String(e?.message ?? e)}`);
+        }
+      });
+
+      addBtn.addEventListener('click', async () => {
+        const rawId = String(idInput.value || '').trim();
+        if (!rawId) {
+          new Notice('Source id is required.');
+          return;
+        }
+        const sid = sanitizeSourceId(rawId);
+        const label = String(labelInput.value || '').trim();
+        try {
+          await (this.plugin as any).apiRequest({
+            path: '/sources',
+            method: 'POST',
+            body: JSON.stringify({ id: sid, label: label || sid, enabled: true }),
+            headers: { 'Content-Type': 'application/json' }
+          });
+          idInput.value = '';
+          labelInput.value = '';
+          await loadSources();
+          sourceSel.value = sid;
+          selectedSourceId = sid;
+          sourceChoices.add(sid);
+          refreshRoutingBadge();
+          new Notice(`Source added: ${sid}`);
+        } catch (e: any) {
+          new Notice(`Add source failed: ${String(e?.message ?? e)}`);
+        }
+      });
+
+      makeDefaultBtn.addEventListener('click', async () => {
+        const sid = String(selectedSourceId || sourceSel.value || '').trim();
+        if (!sid) return;
+        try {
+          await (this.plugin as any).apiRequest({ path: `/sources/${encodeURIComponent(sid)}/activate`, method: 'POST' });
+          await loadSources();
+          new Notice(`Backend default source set: ${sid}`);
+        } catch (e: any) {
+          new Notice(`Set default failed: ${String(e?.message ?? e)}`);
+        }
+      });
+
+      void loadSources();
+
       new Setting(el)
         .setName('Test connection')
         .setDesc('Checks /health and prints database stats from /stats.')
         .addButton((btn) =>
           btn.setButtonText('Test').setCta().onClick(async () => {
-            const baseUrl = this.plugin.settings.apiBaseUrl.replace(/\/$/, '');
             try {
-              const health = await requestUrl({ url: `${baseUrl}/health` });
-              const stats = await requestUrl({ url: `${baseUrl}/stats` });
+              const health = await (this.plugin as any).apiRequest({ path: '/health' });
+              const stats = await (this.plugin as any).apiRequest({ path: '/stats' });
               // eslint-disable-next-line no-console
               console.log('[sx-obsidian-db] health', health.json);
               // eslint-disable-next-line no-console
@@ -360,8 +625,7 @@ export class SxDbSettingTab extends PluginSettingTab {
         )
         .addButton((btn) =>
           btn.setButtonText('Open API docs').onClick(() => {
-            const baseUrl = this.plugin.settings.apiBaseUrl.replace(/\/$/, '');
-            window.open(`${baseUrl}/docs`);
+            window.open((this.plugin as any).apiUrl('/docs'));
           })
         );
 
@@ -383,10 +647,279 @@ export class SxDbSettingTab extends PluginSettingTab {
         );
     }
 
-    // ── Fetch tab ──────────────────────────────────────────────────────────
+    // ── Profiles tab: per-source PathLinker / vault / DB config ────────────
     {
-      const el = panels.fetch;
-      el.createEl('h3', { text: 'Fetch (DB → Vault)' });
+      const el = panels.profiles;
+      el.createEl('h3', { text: 'Source Profiles' });
+      el.createEl('p', {
+        text: 'Each source profile maps to a vault, PathLinker group, and database configuration. Changes are saved back to the backend .env file.',
+        cls: 'setting-item-description'
+      });
+
+      const sanitizeSourceId = (raw: string): string => {
+        const cleaned = String(raw || '')
+          .trim()
+          .replace(/[^a-zA-Z0-9._-]/g, '');
+        return cleaned || 'default';
+      };
+
+      const getActiveSourceForProfiles = (): string => {
+        const effective = (this.plugin as any).getEffectiveSourceId?.();
+        const explicit = String((this.plugin.settings as any).activeSourceId || 'default');
+        return sanitizeSourceId(String(effective || explicit || 'default'));
+      };
+
+      const profilesHost = el.createDiv({ cls: 'sxdb-profiles-host' });
+      const statusBar = el.createDiv({ cls: 'sxdb-profiles-status' });
+
+      new Setting(el)
+        .setName('Show all profiles')
+        .setDesc('Troubleshooting override. Default behavior shows only profile(s) matching the active source from Database settings.')
+        .addToggle((toggle) =>
+          toggle.setValue(Boolean((this.plugin.settings as any).profilesShowAll)).onChange(async (value) => {
+            (this.plugin.settings as any).profilesShowAll = value;
+            await this.plugin.saveSettings();
+            void loadProfiles();
+          })
+        );
+
+      const renderProfileCard = (
+        host: HTMLElement,
+        profile: any,
+        onSave: (idx: number, updates: Record<string, string>) => Promise<void>
+      ) => {
+        const card = host.createDiv({ cls: 'sxdb-profile-card' });
+
+        // ── Header ──
+        const header = card.createDiv({ cls: 'sxdb-profile-header' });
+        header.createEl('span', {
+          text: `#${profile.index}`,
+          cls: 'sxdb-profile-badge'
+        });
+        header.createEl('span', {
+          text: String(profile.label || `Profile ${profile.index}`),
+          cls: 'sxdb-profile-title'
+        });
+        header.createEl('span', {
+          text: profile.source_id || '',
+          cls: 'sxdb-profile-source-id'
+        });
+
+        // ── Editable fields ──
+        const fields: Array<{
+          key: string;
+          label: string;
+          desc: string;
+          value: string;
+          section: string;
+        }> = [
+          { key: 'label', label: 'Label', desc: 'Human-readable profile name', value: profile.label || '', section: 'source' },
+          { key: 'src_path', label: 'Source path', desc: 'Root path where media is located (Linux/WSL)', value: profile.src_path || '', section: 'source' },
+          { key: 'source_id', label: 'Source ID', desc: 'Unique source identifier (e.g. assets_1)', value: profile.source_id || '', section: 'source' },
+          { key: 'assets_path', label: 'Assets path', desc: 'SchedulerX assets directory', value: profile.assets_path || '', section: 'source' },
+          { key: 'pathlinker_group', label: 'PathLinker group', desc: 'group: prefix for wikilinks (e.g. alexnova/data)', value: profile.pathlinker_group || '', section: 'pathlinker' },
+          { key: 'group_name', label: 'Group name', desc: 'Source root dir name used by external file linker', value: profile.group_name || '', section: 'pathlinker' },
+          { key: 'vault_name', label: 'Vault name', desc: 'Obsidian vault name for this profile', value: profile.vault_name || '', section: 'vault' },
+          { key: 'vault_path', label: 'Vault path', desc: 'Vault filesystem path', value: profile.vault_path || '', section: 'vault' },
+        ];
+
+        const pendingEdits: Record<string, string> = {};
+        let currentSection = '';
+
+        for (const f of fields) {
+          if (f.section !== currentSection) {
+            currentSection = f.section;
+            const sectionLabel = {
+              source: '📁 Source',
+              pathlinker: '🔗 PathLinker',
+              vault: '🏠 Vault'
+            }[f.section] || f.section;
+            card.createEl('div', { text: sectionLabel, cls: 'sxdb-profile-section-label' });
+          }
+
+          new Setting(card)
+            .setName(f.label)
+            .setDesc(f.desc)
+            .addText((text) =>
+              text
+                .setPlaceholder(f.label)
+                .setValue(f.value)
+                .onChange((value) => {
+                  pendingEdits[f.key] = value.trim();
+                })
+            );
+        }
+
+        // ── DB Profiles (read-only summary) ──
+        const dbSection = card.createDiv({ cls: 'sxdb-profile-db-section' });
+        dbSection.createEl('div', { text: '🗄️ Database Profiles', cls: 'sxdb-profile-section-label' });
+        const dbProfiles = profile.db_profiles || {};
+        for (const [mode, info] of Object.entries(dbProfiles) as [string, any][]) {
+          if (mode === 'sql') continue;
+          const row = dbSection.createDiv({ cls: 'sxdb-profile-db-row' });
+          const statusDot = info?.configured ? '🟢' : '⚪';
+          row.createEl('span', {
+            text: `${statusDot} ${mode.charAt(0).toUpperCase() + mode.slice(1)}`,
+            cls: 'sxdb-profile-db-mode'
+          });
+          row.createEl('span', {
+            text: info?.alias || '(not configured)',
+            cls: 'sxdb-profile-db-alias'
+          });
+        }
+
+        // ── Save button ──
+        const actions = card.createDiv({ cls: 'sxdb-profile-actions' });
+        const saveBtn = actions.createEl('button', {
+          text: 'Save to .env',
+          cls: 'sxdb-profile-save-btn mod-cta'
+        });
+        const cardStatus = actions.createEl('span', {
+          text: '',
+          cls: 'sxdb-profile-save-status'
+        });
+
+        saveBtn.addEventListener('click', async () => {
+          if (Object.keys(pendingEdits).length === 0) {
+            cardStatus.setText('No changes to save');
+            cardStatus.classList.add('sxdb-status-info');
+            setTimeout(() => { cardStatus.setText(''); cardStatus.classList.remove('sxdb-status-info'); }, 2000);
+            return;
+          }
+          saveBtn.disabled = true;
+          cardStatus.setText('Saving…');
+          try {
+            await onSave(profile.index, pendingEdits);
+            cardStatus.setText('✓ Saved');
+            cardStatus.classList.add('sxdb-status-ok');
+            // Clear pending
+            for (const k of Object.keys(pendingEdits)) delete pendingEdits[k];
+          } catch (e: any) {
+            cardStatus.setText(`✗ ${e?.message || 'Save failed'}`);
+            cardStatus.classList.add('sxdb-status-error');
+          } finally {
+            saveBtn.disabled = false;
+            setTimeout(() => {
+              cardStatus.setText('');
+              cardStatus.classList.remove('sxdb-status-ok', 'sxdb-status-error', 'sxdb-status-info');
+            }, 3000);
+          }
+        });
+      };
+
+      // ── Load profiles from API ──
+      const loadProfiles = async () => {
+        profilesHost.empty();
+        statusBar.empty();
+        statusBar.setText('Loading profiles…');
+
+        try {
+          const base = String(this.plugin.settings.apiBaseUrl || 'http://127.0.0.1:8123').replace(/\/+$/, '');
+          const sourceId = (this.plugin as any).getEffectiveSourceId?.() || 'default';
+          const profileIdx = String(Math.max(1, Number((this.plugin as any).getEffectiveProfileIndex?.() || 1)));
+          const res = await fetch(`${base}/pipeline/profiles`, {
+            headers: { 'X-SX-Source-ID': sourceId, 'X-SX-Profile-Index': profileIdx },
+            signal: AbortSignal.timeout(8000)
+          });
+          if (!res.ok) throw new Error(`API returned ${res.status}`);
+          const data = await res.json();
+          const profiles: any[] = data.profiles || [];
+          const activeSource = getActiveSourceForProfiles();
+          const showAll = Boolean((this.plugin.settings as any).profilesShowAll);
+
+          let shownProfiles = showAll
+            ? profiles
+            : profiles.filter((p) => sanitizeSourceId(String(p?.source_id || '')) === activeSource);
+
+          // Safe fallback: if source mapping is missing, render all profiles rather than leaving UI blank.
+          let fallbackToAll = false;
+          if (!showAll && shownProfiles.length === 0 && profiles.length > 0) {
+            shownProfiles = profiles;
+            fallbackToAll = true;
+          }
+
+          const filterLabel = showAll
+            ? 'show-all (override enabled)'
+            : fallbackToAll
+              ? 'active-only (fallback to all: no source mapping)'
+              : 'active-only';
+          statusBar.setText(
+            `Active source: ${activeSource} · filter: ${filterLabel} · showing ${shownProfiles.length}/${profiles.length} profile(s) from ${data.env_path || '.env'}`
+          );
+
+          if (profiles.length === 0) {
+            profilesHost.createEl('p', {
+              text: 'No source profiles found. Add SRC_PATH_N entries to your .env file.',
+              cls: 'sxdb-profiles-empty'
+            });
+            return;
+          }
+
+          // Cache profile configs locally
+          const cache: Record<number, any> = {};
+          for (const p of profiles) cache[p.index] = p;
+          this.plugin.settings.profileConfigs = cache;
+          await this.plugin.saveSettings();
+
+          for (const p of shownProfiles) {
+            renderProfileCard(profilesHost, p, async (idx, updates) => {
+              const putRes = await fetch(`${base}/config/profiles/${idx}`, {
+                method: 'PUT',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-SX-Source-ID': sourceId,
+                  'X-SX-Profile-Index': profileIdx
+                },
+                body: JSON.stringify(updates),
+                signal: AbortSignal.timeout(8000),
+              });
+              if (!putRes.ok) {
+                const err = await putRes.json().catch(() => ({}));
+                throw new Error(err.detail || `API returned ${putRes.status}`);
+              }
+              const result = await putRes.json();
+              // Update local cache with the returned profile
+              if (result.profile) {
+                this.plugin.settings.profileConfigs[idx] = result.profile;
+                await this.plugin.saveSettings();
+              }
+              new Notice(`Profile #${idx} saved to .env`);
+            });
+          }
+        } catch (e: any) {
+          statusBar.setText('');
+          profilesHost.createEl('p', {
+            text: `Failed to load profiles: ${e?.message || 'Unknown error'}. Is the API server running?`,
+            cls: 'sxdb-profiles-error'
+          });
+        }
+      };
+
+      // Refresh button
+      new Setting(el)
+        .setName('Refresh')
+        .setDesc('Reload profiles from the backend API')
+        .addButton((btn) =>
+          btn.setButtonText('↻ Reload').onClick(() => void loadProfiles())
+        );
+
+      void loadProfiles();
+    }
+
+    // ── Data Flow tab: fetch + sync/push semantics in one place ────────────
+    {
+      const el = panels.dataflow;
+      el.createEl('h3', { text: 'Data Flow (Sync / Fetch / Push)' });
+      el.createEl('h4', { text: 'Definitions' });
+      el.createEl('p', {
+        text:
+          'Sync = overall two-way workflow. Fetch = DB → Vault note materialization. Push = Vault → DB persistence of your edited notes.'
+      });
+      el.createEl('p', {
+        text:
+          'This page groups all transfer controls together so behavior and safety settings stay coherent.'
+      });
+      el.createEl('h4', { text: 'Fetch (DB → Vault)' });
       el.createEl('p', {
         text:
           'Materialize an “active working set” of notes into your vault. You can fetch Bookmarks, Authors, or both, with flexible filters.'
@@ -431,6 +964,21 @@ export class SxDbSettingTab extends PluginSettingTab {
             this.plugin.settings.fetchForceRegenerate = value;
             await this.plugin.saveSettings();
           })
+        );
+
+      new Setting(el)
+        .setName('PathLinker group fallback (legacy)')
+        .setDesc(
+          'Legacy fallback: used only when no per-profile PathLinker group is set in the Profiles tab. Prefer configuring this in Settings → Profiles.'
+        )
+        .addText((text) =>
+          text
+            .setPlaceholder('e.g. alexnova')
+            .setValue(String(this.plugin.settings.localPathlinkerGroup1 || ''))
+            .onChange(async (value) => {
+              this.plugin.settings.localPathlinkerGroup1 = String(value || '').trim();
+              await this.plugin.saveSettings();
+            })
         );
 
       new Setting(el)
@@ -529,19 +1077,8 @@ export class SxDbSettingTab extends PluginSettingTab {
       };
 
       (async () => {
-        const baseUrl = this.plugin.settings.apiBaseUrl.replace(/\/$/, '');
-        try {
-          const resp = await requestUrl({ url: `${baseUrl}/authors?limit=2000&order=count` });
-          const data = resp.json as {
-            authors: Array<{
-              author_id?: string | null;
-              author_unique_id?: string | null;
-              author_name?: string | null;
-              items_count?: number | null;
-            }>;
-          };
-          const authorsRaw = data?.authors ?? [];
-          const authors = authorsRaw
+        const normalizeAuthors = (authorsRaw: Array<any>) => {
+          return (authorsRaw || [])
             .map((a) => {
               const uid = String(a.author_unique_id || '').trim();
               if (!uid) return null;
@@ -552,11 +1089,62 @@ export class SxDbSettingTab extends PluginSettingTab {
               return { uid, label };
             })
             .filter(Boolean) as Array<{ uid: string; label: string }>;
+        };
+
+        try {
+          const resp = await (this.plugin as any).apiRequest({
+            path: '/authors',
+            query: { limit: '2000', order: 'count' }
+          });
+          const data = resp.json as {
+            authors: Array<{
+              author_id?: string | null;
+              author_unique_id?: string | null;
+              author_name?: string | null;
+              items_count?: number | null;
+            }>;
+          };
+          const authors = normalizeAuthors(data?.authors ?? []);
 
           renderAuthors(authors, authorSearch.value);
           authorSearch.addEventListener('input', () => renderAuthors(authors, authorSearch.value));
-        } catch {
-          authorList.createEl('em', { text: 'Authors list unavailable (API not reachable). You can still fetch without selecting authors.' });
+        } catch (e1: any) {
+          try {
+            const resp2 = await (this.plugin as any).apiRequest({
+              path: '/items',
+              query: { limit: '2000', offset: '0', order: 'author' }
+            });
+            const data2 = resp2.json as {
+              items: Array<{
+                author_id?: string | null;
+                author_unique_id?: string | null;
+                author_name?: string | null;
+              }>;
+            };
+            const counts = new Map<string, number>();
+            const meta = new Map<string, { uid: string; aid: string; name: string }>();
+            for (const it of data2?.items ?? []) {
+              const uid = String(it.author_unique_id || '').trim();
+              if (!uid) continue;
+              const aid = String(it.author_id || '').trim();
+              const name = String(it.author_name || '').trim();
+              counts.set(uid, (counts.get(uid) || 0) + 1);
+              if (!meta.has(uid)) meta.set(uid, { uid, aid, name });
+            }
+            const fallbackRaw = Array.from(meta.values()).map((m) => ({
+              author_unique_id: m.uid,
+              author_id: m.aid,
+              author_name: m.name,
+              items_count: counts.get(m.uid) || 0
+            }));
+            const authors = normalizeAuthors(fallbackRaw).sort((a, b) => a.label.localeCompare(b.label));
+            renderAuthors(authors, authorSearch.value);
+            authorSearch.addEventListener('input', () => renderAuthors(authors, authorSearch.value));
+            new Notice('Loaded author list via /items fallback.');
+          } catch (e2: any) {
+            const msg = String(e2?.message || e1?.message || 'Unknown API error');
+            authorList.createEl('em', { text: `Authors list unavailable (${msg}). You can still fetch without selecting authors.` });
+          }
         }
       })();
 
@@ -566,7 +1154,6 @@ export class SxDbSettingTab extends PluginSettingTab {
         .setDesc('Fetches notes from the API and writes them into your vault (destination depends on Vault write strategy).')
         .addButton((btn) =>
           btn.setButtonText('Fetch now').setCta().onClick(async () => {
-            const baseUrl = this.plugin.settings.apiBaseUrl.replace(/\/$/, '');
             const batch = Math.max(10, this.plugin.settings.syncBatchSize ?? 200);
             const maxItems = Math.max(0, this.plugin.settings.syncMaxItems ?? 2000);
             const replace = Boolean(this.plugin.settings.syncReplaceOnPull);
@@ -575,6 +1162,7 @@ export class SxDbSettingTab extends PluginSettingTab {
             const q = (this.plugin.settings.fetchQuery || '').trim();
             const statuses = Array.isArray(this.plugin.settings.fetchStatuses) ? this.plugin.settings.fetchStatuses : [];
             const force = Boolean(this.plugin.settings.fetchForceRegenerate);
+            const pathlinkerGroup = String(this.plugin.settings.localPathlinkerGroup1 || '').trim();
 
             const mode = this.plugin.settings.fetchMode || 'bookmarks';
             const authorUids = Array.isArray(this.plugin.settings.fetchAuthorUniqueIds)
@@ -620,6 +1208,7 @@ export class SxDbSettingTab extends PluginSettingTab {
                 if (authorUids.length) params.author_unique_id = authorUids.join(',');
                 if (statuses.length) params.status = statuses.join(',');
                 if (force) params.force = 'true';
+                if (pathlinkerGroup) params.pathlinker_group = pathlinkerGroup;
 
                 // Use explicit mode routing rather than just bookmarked_only.
                 // - bookmarks: server-side filter
@@ -627,12 +1216,7 @@ export class SxDbSettingTab extends PluginSettingTab {
                 if (mode === 'bookmarks') params.bookmarked_only = 'true';
                 else params.bookmarked_only = 'false';
 
-                const qs = Object.entries(params)
-                  .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-                  .join('&');
-                const url = `${baseUrl}/notes?${qs}`;
-
-                const resp = await requestUrl({ url });
+                const resp = await (this.plugin as any).apiRequest({ path: '/notes', query: params });
                 const data = resp.json as {
                   notes: Array<{ id: string; markdown: string; bookmarked?: boolean; author_unique_id?: string | null; author_name?: string | null }>;
                   total: number;
@@ -693,10 +1277,113 @@ export class SxDbSettingTab extends PluginSettingTab {
         );
     }
 
-    // ── Sync tab ───────────────────────────────────────────────────────────
+    // ── Database tab (continued): server control ───────────────────────────
     {
-      const el = panels.sync;
-      el.createEl('h3', { text: 'Sync (DB ↔ Vault)' });
+      const el = panels.database;
+      new Setting(el)
+        .setName('Server target')
+        .setDesc('Choose which backend profile to launch from the plugin.')
+        .addDropdown((dd) => {
+          dd.addOption('local', 'Local (LOCAL_N)');
+          dd.addOption('cloud-session', 'Cloud (SESSION_N)');
+          dd.addOption('cloud-transaction', 'Cloud (TRANSACTION_N)');
+          dd.setValue(String((this.plugin.settings as any).backendServerTarget || 'local'));
+          dd.onChange(async (v) => {
+            (this.plugin.settings as any).backendServerTarget =
+              v === 'cloud-session' || v === 'cloud-transaction' ? v : 'local';
+            await this.plugin.saveSettings();
+          });
+        });
+
+      new Setting(el)
+        .setName('Command shell')
+        .setDesc('Shell used to run backend control commands from the plugin.')
+        .addDropdown((dd) => {
+          dd.addOption('bash', 'bash');
+          dd.addOption('zsh', 'zsh');
+          dd.addOption('sh', 'sh');
+          dd.addOption('powershell', 'PowerShell');
+          dd.addOption('cmd', 'Command Prompt (cmd)');
+          dd.setValue(String((this.plugin.settings as any).backendCommandShell || 'bash'));
+          dd.onChange(async (v) => {
+            (this.plugin.settings as any).backendCommandShell =
+              v === 'zsh' || v === 'sh' || v === 'powershell' || v === 'cmd' ? v : 'bash';
+            await this.plugin.saveSettings();
+          });
+        });
+
+      el.createEl('h3', { text: 'Backend server control' });
+      el.createEl('p', {
+        text: 'Launch/update directly from the plugin using sxctl in your vault/workspace root.'
+      });
+
+      new Setting(el)
+        .setName('Server lifecycle')
+        .setDesc('Start/stop/status for the selected server target.')
+        .addButton((btn) =>
+          btn.setButtonText('Start selected').setCta().onClick(() => {
+            const pid = this.plugin.manifest?.id || 'sx-obsidian-db';
+            (this.app as any).commands?.executeCommandById?.(`${pid}:sxdb-server-start-selected`);
+          })
+        )
+        .addButton((btn) =>
+          btn.setButtonText('Stop').onClick(() => {
+            const pid = this.plugin.manifest?.id || 'sx-obsidian-db';
+            (this.app as any).commands?.executeCommandById?.(`${pid}:sxdb-server-stop`);
+          })
+        )
+        .addButton((btn) =>
+          btn.setButtonText('Status').onClick(() => {
+            const pid = this.plugin.manifest?.id || 'sx-obsidian-db';
+            (this.app as any).commands?.executeCommandById?.(`${pid}:sxdb-server-status`);
+          })
+        );
+
+      new Setting(el)
+        .setName('Plugin maintenance')
+        .setDesc('Build/update the plugin via sxctl.')
+        .addButton((btn) =>
+          btn.setButtonText('Update plugin').onClick(() => {
+            const pid = this.plugin.manifest?.id || 'sx-obsidian-db';
+            (this.app as any).commands?.executeCommandById?.(`${pid}:sxdb-plugin-update`);
+          })
+        );
+
+      el.createEl('h3', { text: 'Project documentation' });
+
+      new Setting(el)
+        .setName('Project docs file')
+        .setDesc('Vault-relative docs landing page to open from the plugin.')
+        .addText((text) =>
+          text
+            .setPlaceholder('docs/USAGE.md')
+            .setValue(String((this.plugin.settings as any).projectDocsPath || 'docs/USAGE.md'))
+            .onChange(async (v) => {
+              (this.plugin.settings as any).projectDocsPath = String(v || '').trim() || 'docs/USAGE.md';
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(el)
+        .setName('Open docs')
+        .setDesc('Open project docs (not just API endpoints).')
+        .addButton((btn) =>
+          btn.setButtonText('Project docs').setCta().onClick(() => {
+            const pid = this.plugin.manifest?.id || 'sx-obsidian-db';
+            (this.app as any).commands?.executeCommandById?.(`${pid}:sxdb-open-project-docs`);
+          })
+        )
+        .addButton((btn) =>
+          btn.setButtonText('API docs').onClick(() => {
+            window.open((this.plugin as any).apiUrl('/docs'));
+          })
+        );
+    }
+
+    // ── Data Flow tab (continued): sync/push controls ──────────────────────
+    {
+      const el = panels.dataflow;
+      el.createEl('h3', { text: 'Sync / Push Controls' });
       el.createEl('p', {
         text:
           'SQLite is the canonical store. You can materialize a small subset as .md files in the vault (DB → vault), and optionally push edits back (vault → DB).'
@@ -872,7 +1559,6 @@ export class SxDbSettingTab extends PluginSettingTab {
         )
         .addButton((btn) =>
           btn.setButtonText('Push now').onClick(async () => {
-            const baseUrl = this.plugin.settings.apiBaseUrl.replace(/\/$/, '');
             const max = Math.max(0, this.plugin.settings.syncMaxItems ?? 2000);
             const deleteAfter = Boolean(this.plugin.settings.pushDeleteAfter);
 
@@ -937,8 +1623,8 @@ export class SxDbSettingTab extends PluginSettingTab {
               const id = f.basename;
               try {
                 const md = await this.app.vault.read(f);
-                await requestUrl({
-                  url: `${baseUrl}/items/${encodeURIComponent(id)}/note-md`,
+                await (this.plugin as any).apiRequest({
+                  path: `/items/${encodeURIComponent(id)}/note-md`,
                   method: 'PUT',
                   body: JSON.stringify({ markdown: md, template_version: 'user' }),
                   headers: { 'Content-Type': 'application/json' }
@@ -955,44 +1641,6 @@ export class SxDbSettingTab extends PluginSettingTab {
             }
 
             new Notice(`Push complete: ${pushed} pushed${deleteAfter ? `, ${deleted} deleted` : ''}.`);
-          })
-        );
-    }
-
-    // ── Backend tab ─────────────────────────────────────────────────────────
-    {
-      const el = panels.backend;
-      el.createEl('h3', { text: 'Backend server' });
-      el.createEl('p', {
-        text:
-          'Obsidian plugins cannot reliably start your Python server for security reasons. Use the buttons below to copy commands, then run them in a terminal.'
-      });
-
-      new Setting(el)
-        .setName('Start server (copy commands)')
-        .setDesc('Run from the sx_obsidian repo root.')
-        .addButton((btn) =>
-          btn.setButtonText('Copy: sxctl api serve').setCta().onClick(async () => {
-            const ok = await copyToClipboard('./sxctl.sh api serve');
-            new Notice(ok ? 'Copied.' : 'Copy failed (clipboard permissions).');
-          })
-        )
-        .addButton((btn) =>
-          btn.setButtonText('Copy: sxctl api serve-bg').onClick(async () => {
-            const ok = await copyToClipboard('./sxctl.sh api serve-bg');
-            new Notice(ok ? 'Copied.' : 'Copy failed (clipboard permissions).');
-          })
-        )
-        .addButton((btn) =>
-          btn.setButtonText('Copy: python -m sx_db serve').onClick(async () => {
-            const ok = await copyToClipboard('./.venv/bin/python -m sx_db serve');
-            new Notice(ok ? 'Copied.' : 'Copy failed (clipboard permissions).');
-          })
-        )
-        .addButton((btn) =>
-          btn.setButtonText('Open /docs').onClick(() => {
-            const baseUrl = this.plugin.settings.apiBaseUrl.replace(/\/$/, '');
-            window.open(`${baseUrl}/docs`);
           })
         );
     }
@@ -1063,9 +1711,8 @@ export class SxDbSettingTab extends PluginSettingTab {
           'Choose how Peek opens notes. “Hover Editor” and “Popout” use Obsidian’s native note views (properties, reading/live preview), while “Inline” is SX’s lightweight renderer.'
         )
         .addDropdown((dd) => {
-          dd.addOption('inline', 'Inline (SX window)');
-          dd.addOption('inline-leaf', 'Inline (Obsidian leaf) — experimental');
-          dd.addOption('hover-editor', 'Hover Editor popover (requires Hover Editor plugin)');
+          dd.addOption('inline', 'Inline (Hover Obsidian leaf)');
+          dd.addOption('split', 'Split tab (Obsidian leaf)');
           dd.addOption('popout', 'Popout window (Obsidian leaf)');
           dd.setValue((this.plugin.settings as any).libraryNotePeekEngine || 'inline');
           dd.setDisabled(!Boolean(this.plugin.settings.libraryNotePeekEnabled));
@@ -1307,7 +1954,6 @@ export class SxDbSettingTab extends PluginSettingTab {
       };
 
       const call = async (apply: boolean) => {
-        const baseUrl = this.plugin.settings.apiBaseUrl.replace(/\/$/, '');
         const payload = {
           apply,
           confirm: apply ? String(confirmText || '') : '',
@@ -1318,8 +1964,8 @@ export class SxDbSettingTab extends PluginSettingTab {
         };
 
         try {
-          const resp = await requestUrl({
-            url: `${baseUrl}/danger/reset`,
+          const resp = await (this.plugin as any).apiRequest({
+            path: '/danger/reset',
             method: 'POST',
             body: JSON.stringify(payload),
             headers: { 'Content-Type': 'application/json' }
@@ -1358,6 +2004,66 @@ export class SxDbSettingTab extends PluginSettingTab {
     {
       const el = panels.advanced;
       el.createEl('h3', { text: 'Advanced' });
+
+      el.createEl('h4', { text: 'Routing overrides (advanced)' });
+      el.createEl('p', {
+        text:
+          'Most users should use “Active source profile (single control)” in Database. Use these only for troubleshooting or deliberate overrides.'
+      });
+
+      const sanitizeSourceIdAdvanced = (raw: string): string => {
+        const cleaned = String(raw || '')
+          .trim()
+          .replace(/[^a-zA-Z0-9._-]/g, '');
+        return cleaned || 'default';
+      };
+
+      new Setting(el)
+        .setName('Active source ID (advanced override)')
+        .setDesc('Manual override for request source routing. Single-profile selector will reset this to profile-canonical source when affirmed.')
+        .addText((text) =>
+          text
+            .setPlaceholder('assets_1')
+            .setValue(String((this.plugin.settings as any).activeSourceId || 'default'))
+            .onChange(async (value) => {
+              (this.plugin.settings as any).activeSourceId = sanitizeSourceIdAdvanced(value);
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(el)
+        .setName('Profile index (_N)')
+        .setDesc('Manual override for routing/launch commands. Usually managed by the single profile control.')
+        .addText((text) =>
+          text
+            .setPlaceholder('1')
+            .setValue(String((this.plugin.settings as any).launcherProfileIndex ?? 1))
+            .onChange(async (v) => {
+              const n = Number(v);
+              (this.plugin.settings as any).launcherProfileIndex = Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(el)
+        .setName('Schema-index safety guard')
+        .setDesc('Blocks writes if source/profile indexes conflict. Keep ON unless actively diagnosing behavior.')
+        .addToggle((toggle) =>
+          toggle.setValue(Boolean((this.plugin.settings as any).schemaIndexSafetyGuard)).onChange(async (value) => {
+            (this.plugin.settings as any).schemaIndexSafetyGuard = value;
+            await this.plugin.saveSettings();
+          })
+        );
+
+      new Setting(el)
+        .setName('Auto-align source to profile index')
+        .setDesc('Keeps routing deterministic by deriving source from profile when needed. Recommended ON.')
+        .addToggle((toggle) =>
+          toggle.setValue(Boolean((this.plugin.settings as any).enforceProfileSourceAlignment ?? true)).onChange(async (value) => {
+            (this.plugin.settings as any).enforceProfileSourceAlignment = value;
+            await this.plugin.saveSettings();
+          })
+        );
 
       new Setting(el)
         .setName('Search limit')

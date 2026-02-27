@@ -25,6 +25,20 @@ const USER_OWNED_KEYS = new Set<string>([
   'sx_select'
 ]);
 
+// Legacy routing/context keys that can become stale when switching profiles/schemas.
+// These should always be sourced from fresh incoming markdown, never preserved from old notes.
+const STALE_ROUTING_KEYS = new Set<string>([
+  'source_id',
+  'source',
+  'source_profile',
+  'profile',
+  'profile_index',
+  'schema',
+  'schema_name',
+  'db_profile',
+  'db_backend',
+]);
+
 function extractFrontmatter(md: string): { fm: any; body: string } {
   const text = String(md ?? '');
   if (!text.startsWith('---')) {
@@ -102,6 +116,7 @@ export function mergeMarkdownPreservingUserEdits(existingMd: string, incomingMd:
 
   // Preserve all unknown keys from the existing note.
   for (const [k, v] of Object.entries(exFm)) {
+    if (STALE_ROUTING_KEYS.has(k)) continue;
     if (!(k in mergedFm)) mergedFm[k] = v;
   }
 

@@ -1,160 +1,17 @@
-import { Notice, TFile, TFolder, normalizePath, parseYaml, requestUrl } from 'obsidian';
+import { Notice, TFile, TFolder, normalizePath } from 'obsidian';
 import type SxDbPlugin from './main';
 import { mergeMarkdownPreservingUserEdits } from './markdownMerge';
 import { openPinnedFile } from './leafUtils';
+import {
+  clearMarkdownInFolder,
+  collectMarkdownFiles,
+  ensureFolder,
+  ensureFolderDeep,
+  slugFolderName
+} from './shared/vaultFs';
+import { extractUserMetaPayload, isMediaMissing } from './shared/frontmatterMeta';
 
 type VaultWriteStrategy = 'active-only' | 'split';
-
-function tryGetFrontmatter(md: string): any | null {
-  const text = String(md ?? '');
-  if (!text.startsWith('---')) return null;
-  const parts = text.split('---');
-  // ['', '\n<yaml>\n', '<rest>...']
-  if (parts.length < 3) return null;
-  const raw = parts[1];
-  try {
-    return parseYaml(raw);
-  } catch {
-    return null;
-  }
-}
-
-function extractUserMetaPayload(md: string): any | null {
-  const fm = tryGetFrontmatter(md);
-  if (!fm || typeof fm !== 'object') return null;
-
-  const toStringOrNull = (v: any): string | null => {
-    if (v == null) return null;
-    const s = String(v).trim();
-    return s ? s : null;
-  };
-
-  const toJsonOrStringOrNull = (v: any): string | null => {
-    if (v == null) return null;
-    if (Array.isArray(v) || (typeof v === 'object' && v)) {
-      try {
-        return JSON.stringify(v);
-      } catch {
-        return null;
-      }
-    }
-    return toStringOrNull(v);
-  };
-
-  const toStringArrayOrNull = (v: any): string[] | null => {
-    if (v == null) return null;
-    if (Array.isArray(v)) {
-      const arr = v.map((x: any) => String(x).trim()).filter(Boolean);
-      return arr.length ? arr : [];
-    }
-
-    const s = String(v).trim();
-    if (!s) return null;
-
-    if ((s.startsWith('[') && s.endsWith(']')) || (s.startsWith('{') && s.endsWith('}'))) {
-      try {
-        const obj = JSON.parse(s);
-        if (Array.isArray(obj)) {
-          const arr = obj.map((x: any) => String(x).trim()).filter(Boolean);
-          return arr.length ? arr : [];
-        }
-      } catch {
-        // fall through to csv/newline split
-      }
-    }
-
-    const arr = s
-      .split(/[\n,]/g)
-      .map((x) => String(x).trim())
-      .filter(Boolean);
-    return arr.length ? arr : [];
-  };
-
-  const tagsVal = (fm as any).tags;
-  const tagsStr = Array.isArray(tagsVal)
-    ? tagsVal.map((t: any) => String(t).trim()).filter(Boolean).join(',')
-    : toStringOrNull(tagsVal);
-
-  return {
-    rating: (fm as any).rating != null && String((fm as any).rating).trim() !== '' ? Number((fm as any).rating) : null,
-    status: (() => {
-      const s = (fm as any).status;
-      if (Array.isArray(s)) {
-        const first = s.map((x: any) => String(x).trim()).filter(Boolean)[0];
-        return first ? String(first) : null;
-      }
-      return toStringOrNull(s);
-    })(),
-    statuses: (() => {
-      const s = (fm as any).status;
-      if (Array.isArray(s)) {
-        const arr = s.map((x: any) => String(x).trim()).filter(Boolean);
-        return arr.length ? arr : null;
-      }
-      const one = toStringOrNull(s);
-      return one ? [one] : null;
-    })(),
-    tags: tagsStr,
-    notes: toStringOrNull((fm as any).notes),
-    product_link: toStringOrNull((fm as any).product_link),
-    author_links: toStringArrayOrNull((fm as any).author_links),
-    platform_targets: toJsonOrStringOrNull((fm as any).platform_targets ?? (fm as any).platform_target),
-    workflow_log: toJsonOrStringOrNull((fm as any).workflow_log),
-    post_url: toStringOrNull((fm as any).post_url),
-    published_time: toStringOrNull((fm as any).published_time)
-  };
-}
-
-function isMediaMissing(md: string): boolean {
-  const fm = tryGetFrontmatter(md);
-  if (!fm || typeof fm !== 'object') return false;
-  const v = (fm as any).media_missing;
-  return v === true || v === 'true' || v === 1 || v === '1';
-}
-
-function slugFolderName(s: string): string {
-  const v = (s || '').trim().toLowerCase();
-  const slug = v
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '');
-  return slug || 'unknown';
-}
-
-function collectMarkdownFiles(folder: TFolder): TFile[] {
-  const out: TFile[] = [];
-  const stack = [...folder.children];
-  while (stack.length) {
-    const f = stack.pop();
-    if (!f) continue;
-    if (f instanceof TFile) {
-      if (f.extension === 'md') out.push(f);
-    } else if (f instanceof TFolder) {
-      stack.push(...f.children);
-    }
-  }
-  return out;
-}
-
-async function ensureFolder(plugin: SxDbPlugin, folderPath: string): Promise<TFolder> {
-  const existing = plugin.app.vault.getAbstractFileByPath(folderPath);
-  if (existing && existing instanceof TFolder) return existing;
-  await plugin.app.vault.createFolder(folderPath).catch(() => void 0);
-  const created = plugin.app.vault.getAbstractFileByPath(folderPath);
-  if (!created || !(created instanceof TFolder)) throw new Error(`Failed to create folder: ${folderPath}`);
-  return created;
-}
-
-async function ensureFolderDeep(plugin: SxDbPlugin, folderPath: string): Promise<void> {
-  const fp = normalizePath(folderPath);
-  const parts = fp.split('/').filter(Boolean);
-  let cur = '';
-  for (const part of parts) {
-    cur = cur ? `${cur}/${part}` : part;
-    // createFolder can throw if parents are missing depending on platform/version.
-    await plugin.app.vault.createFolder(cur).catch(() => void 0);
-  }
-}
 
 function pickPreferredFileForId(plugin: SxDbPlugin, files: TFile[]): TFile {
   const activeRoot = normalizePath(plugin.settings.activeNotesDir);
@@ -186,23 +43,10 @@ function tsSlug(d: Date): string {
   return d.toISOString().replace(/[:.]/g, '-');
 }
 
-async function clearMarkdownInFolder(plugin: SxDbPlugin, folderPath: string): Promise<number> {
-  const root = plugin.app.vault.getAbstractFileByPath(folderPath);
-  if (!root || !(root instanceof TFolder)) return 0;
-  const files = collectMarkdownFiles(root);
-  let deleted = 0;
-  for (const f of files) {
-    await plugin.app.vault.delete(f);
-    deleted += 1;
-  }
-  return deleted;
-}
-
 export async function sxTestConnection(plugin: SxDbPlugin): Promise<void> {
-  const baseUrl = plugin.settings.apiBaseUrl.replace(/\/$/, '');
   try {
-    await requestUrl({ url: `${baseUrl}/health` });
-    const stats = await requestUrl({ url: `${baseUrl}/stats` });
+    await (plugin as any).apiRequest({ path: '/health' });
+    const stats = await (plugin as any).apiRequest({ path: '/stats' });
     // eslint-disable-next-line no-console
     console.log('[sx-obsidian-db] stats', stats.json);
     new Notice('✅ Connected. See console for /stats output.');
@@ -212,8 +56,7 @@ export async function sxTestConnection(plugin: SxDbPlugin): Promise<void> {
 }
 
 export function sxOpenApiDocs(plugin: SxDbPlugin): void {
-  const baseUrl = plugin.settings.apiBaseUrl.replace(/\/$/, '');
-  window.open(`${baseUrl}/docs`);
+  window.open((plugin as any).apiUrl('/docs'));
 }
 
 export async function sxPinById(plugin: SxDbPlugin, id: string): Promise<void> {
@@ -223,14 +66,19 @@ export async function sxPinById(plugin: SxDbPlugin, id: string): Promise<void> {
     return;
   }
 
-  const baseUrl = plugin.settings.apiBaseUrl.replace(/\/$/, '');
   const activeDir = normalizePath(plugin.settings.activeNotesDir);
   const targetPath = normalizePath(`${activeDir}/${safeId}.md`);
 
   try {
     const force = Boolean(plugin.settings.fetchForceRegenerate);
-    const url = `${baseUrl}/items/${encodeURIComponent(safeId)}/note${force ? '?force=true' : ''}`;
-    const resp = await requestUrl({ url });
+    const pathlinkerGroup = plugin.getPathlinkerGroupOverride();
+    const resp = await (plugin as any).apiRequest({
+      path: `/items/${encodeURIComponent(safeId)}/note`,
+      query: {
+        ...(force ? { force: 'true' } : {}),
+        ...(pathlinkerGroup ? { pathlinker_group: pathlinkerGroup } : {})
+      }
+    });
     const md = (resp.json as any)?.markdown as string;
     if (!md) throw new Error('API returned no markdown');
 
@@ -265,7 +113,6 @@ export async function sxPinById(plugin: SxDbPlugin, id: string): Promise<void> {
 }
 
 export async function sxFetchNotes(plugin: SxDbPlugin): Promise<void> {
-  const baseUrl = plugin.settings.apiBaseUrl.replace(/\/$/, '');
   const batch = Math.max(10, plugin.settings.syncBatchSize ?? 200);
   const maxItems = Math.max(0, plugin.settings.syncMaxItems ?? 2000);
   const replace = Boolean(plugin.settings.syncReplaceOnPull);
@@ -274,6 +121,7 @@ export async function sxFetchNotes(plugin: SxDbPlugin): Promise<void> {
   const q = (plugin.settings.fetchQuery || '').trim();
   const statuses = Array.isArray(plugin.settings.fetchStatuses) ? plugin.settings.fetchStatuses : [];
   const force = Boolean(plugin.settings.fetchForceRegenerate);
+  const pathlinkerGroup = plugin.getPathlinkerGroupOverride();
 
   const mode = plugin.settings.fetchMode || 'bookmarks';
   const authorUids = Array.isArray(plugin.settings.fetchAuthorUniqueIds)
@@ -288,8 +136,8 @@ export async function sxFetchNotes(plugin: SxDbPlugin): Promise<void> {
     if (replace) {
       if (strategy === 'split' && mode === 'bookmarks') {
         const destDir = normalizePath(plugin.settings.bookmarksNotesDir);
-        await ensureFolder(plugin, destDir);
-        const deleted = await clearMarkdownInFolder(plugin, destDir);
+        await ensureFolder(plugin.app, destDir);
+        const deleted = await clearMarkdownInFolder(plugin.app, destDir);
         if (deleted) new Notice(`Cleared ${deleted} note(s) from ${destDir} before fetch.`);
       } else if (strategy !== 'split') {
         new Notice('Replace-on-pull is ignored for active-only strategy (to avoid deleting canonical notes).');
@@ -317,16 +165,12 @@ export async function sxFetchNotes(plugin: SxDbPlugin): Promise<void> {
       if (authorUids.length) params.author_unique_id = authorUids.join(',');
       if (statuses.length) params.status = statuses.join(',');
       if (force) params.force = 'true';
+      if (pathlinkerGroup) params.pathlinker_group = pathlinkerGroup;
 
       if (mode === 'bookmarks') params.bookmarked_only = 'true';
       else params.bookmarked_only = 'false';
 
-      const qs = Object.entries(params)
-        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-        .join('&');
-      const url = `${baseUrl}/notes?${qs}`;
-
-      const resp = await requestUrl({ url });
+      const resp = await (plugin as any).apiRequest({ path: '/notes', query: params });
       const data = resp.json as {
         notes: Array<{ id: string; markdown: string; bookmarked?: boolean; author_unique_id?: string | null; author_name?: string | null }>;
         total: number;
@@ -364,7 +208,7 @@ export async function sxFetchNotes(plugin: SxDbPlugin): Promise<void> {
                   : [authorDir];
 
         for (const destDir of destDirs) {
-          await ensureFolder(plugin, destDir);
+          await ensureFolder(plugin.app, destDir);
           const targetPath = normalizePath(`${destDir}/${id}.md`);
           const existing = plugin.app.vault.getAbstractFileByPath(targetPath);
           if (existing && existing instanceof TFile) {
@@ -390,7 +234,6 @@ export async function sxFetchNotes(plugin: SxDbPlugin): Promise<void> {
 }
 
 export async function sxPushNotes(plugin: SxDbPlugin): Promise<void> {
-  const baseUrl = plugin.settings.apiBaseUrl.replace(/\/$/, '');
   const max = Math.max(0, plugin.settings.syncMaxItems ?? 2000);
   const deleteAfter = Boolean(plugin.settings.pushDeleteAfter);
 
@@ -441,8 +284,8 @@ export async function sxPushNotes(plugin: SxDbPlugin): Promise<void> {
     const id = f.basename;
     try {
       const md = await plugin.app.vault.read(f);
-      await requestUrl({
-        url: `${baseUrl}/items/${encodeURIComponent(id)}/note-md`,
+      await (plugin as any).apiRequest({
+        path: `/items/${encodeURIComponent(id)}/note-md`,
         method: 'PUT',
         body: JSON.stringify({ markdown: md, template_version: 'user' }),
         headers: { 'Content-Type': 'application/json' }
@@ -451,8 +294,8 @@ export async function sxPushNotes(plugin: SxDbPlugin): Promise<void> {
       // Best-effort: also persist user_meta fields from YAML.
       const payload = extractUserMetaPayload(md);
       if (payload) {
-        await requestUrl({
-          url: `${baseUrl}/items/${encodeURIComponent(id)}/meta`,
+        await (plugin as any).apiRequest({
+          path: `/items/${encodeURIComponent(id)}/meta`,
           method: 'PUT',
           body: JSON.stringify(payload),
           headers: { 'Content-Type': 'application/json' }
@@ -536,8 +379,8 @@ export async function sxConsolidateLegacyNotesToActiveDir(plugin: SxDbPlugin): P
   );
   if (!proceed) return;
 
-  await ensureFolder(plugin, activeDir);
-  await ensureFolderDeep(plugin, archiveRoot);
+  await ensureFolder(plugin.app, activeDir);
+  await ensureFolderDeep(plugin.app, archiveRoot);
 
   let moved = 0;
   let merged = 0;
@@ -568,7 +411,7 @@ export async function sxConsolidateLegacyNotesToActiveDir(plugin: SxDbPlugin): P
             : `misc/${f.name}`;
 
         let archivePath = normalizePath(`${archiveRoot}/${rel}`);
-        await ensureFolderDeep(plugin, archivePath.split('/').slice(0, -1).join('/'));
+        await ensureFolderDeep(plugin.app, archivePath.split('/').slice(0, -1).join('/'));
 
         // If collision, add suffix.
         if (plugin.app.vault.getAbstractFileByPath(archivePath)) {

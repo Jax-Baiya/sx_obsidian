@@ -7,7 +7,6 @@ import {
   WorkspaceWindowInitData,
   normalizePath,
   parseYaml,
-  TAbstractFile,
   TFile,
   TFolder
 } from 'obsidian';
@@ -33,48 +32,32 @@ import {
   shouldCommitLinkChipOnKey as shouldCommitLinkChipOnKeyCore,
   validateHttpUrlLike
 } from './libraryCore';
-
-type ApiItem = {
-  id: string;
-  author_id?: string;
-  author_unique_id?: string;
-  author_name?: string;
-  caption?: string;
-  bookmarked?: number;
-  cover_path?: string;
-  video_path?: string;
-  updated_at?: string;
-  meta?: {
-    rating?: number | null;
-    status?: string | null;
-    statuses?: string[] | null;
-    tags?: string | null;
-    notes?: string | null;
-    product_link?: string | null;
-    author_links?: string[] | string | null;
-    platform_targets?: string | null;
-    workflow_log?: string | null;
-    post_url?: string | null;
-    published_time?: string | null;
-    updated_at?: string | null;
-  };
-};
-
-type ApiAuthor = {
-  author_id?: string | null;
-  author_unique_id: string;
-  author_name?: string | null;
-  items_count: number;
-  bookmarked_count: number;
-};
-
-type ApiNote = {
-  id: string;
-  bookmarked: boolean;
-  author_unique_id?: string | null;
-  author_name?: string | null;
-  markdown: string;
-};
+import type { ApiAuthor, ApiItem, ApiNote } from './libraryTypes';
+import { DEFAULT_LIBRARY_COLUMNS } from './librarySchema';
+import {
+  clearMarkdownInFolder as clearMarkdownInFolderShared,
+  collectMarkdownFiles as collectMarkdownFilesShared,
+  ensureFolder as ensureFolderShared
+} from './shared/vaultFs';
+import { openProtocolOrUrl as openProtocolOrUrlShared, shouldCopyLinkOnClickWithMode } from './shared/linkRouting';
+import { copyToClipboard as copyToClipboardShared } from './shared/clipboard';
+import {
+  buildPeekPrelude as buildPeekPreludeShared,
+  extractFrontmatter as extractFrontmatterShared,
+  normalizeYamlValue as normalizeYamlValueShared
+} from './shared/notePreview';
+import {
+  hasHoverEditorInstalled as hasHoverEditorInstalledShared,
+  hoverEditorCommandId as hoverEditorCommandIdShared,
+  openFileInHoverEditor as openFileInHoverEditorShared
+} from './shared/hoverEditor';
+import {
+  findVaultNotesForId as findVaultNotesForIdShared,
+  openVaultNoteForId as openVaultNoteForIdShared
+} from './shared/vaultNotes';
+import { applySelectionClasses } from './shared/selectionUi';
+import { positionFloatingVideo } from './shared/hoverVideo';
+import { applyFreezePanesLayout, applyStickyOffsets } from './shared/tableLayout';
 
 export const SXDB_LIBRARY_VIEW = 'sxdb-library-view';
 
@@ -106,119 +89,24 @@ export class LibraryView extends ItemView {
     return Math.max(10, Math.min(1000, n));
   }
 
+
+  // Experimental: Obsidian leaf embedded inside the inline Note Peek window.
+  private notePeekLeafOrigNextSibling: ChildNode | null = null;
   private notePeekEl: HTMLDivElement | null = null;
   private notePeekHeaderEl: HTMLDivElement | null = null;
   private notePeekBodyEl: HTMLDivElement | null = null;
-  private notePeekState: { x: number; y: number; w: number; h: number; id: string; filePath: string } | null = null;
-  private notePeekMode: 'preview' | 'source' = 'preview';
+  private notePeekState:
+    | { x: number; y: number; w: number; h: number; id: string; filePath: string }
+    | null = null;
+  private notePeekMode: 'source' | 'preview' = 'preview';
 
-  // Experimental: Obsidian leaf embedded inside the inline Note Peek window.
-  private notePeekLeaf: WorkspaceLeaf | null = null;
-  private notePeekLeafContainer: HTMLElement | null = null;
-  private notePeekLeafOrigParent: HTMLElement | null = null;
-  private notePeekLeafOrigNextSibling: ChildNode | null = null;
-
-  private notePeekEngine(): 'inline' | 'inline-leaf' | 'hover-editor' | 'popout' {
+  private notePeekEngine(): 'inline' | 'split' | 'popout' {
     const v = String((this.plugin.settings as any).libraryNotePeekEngine || 'inline');
-    if (v === 'inline-leaf' || v === 'hover-editor' || v === 'popout') return v;
+    if (v === 'split' || v === 'popout') return v;
     return 'inline';
   }
 
-  private cleanupInlineLeaf(): void {
-    // Best-effort restoration/detach so we don't leave orphaned DOM or empty tabs.
-    const leaf: any = this.notePeekLeaf as any;
-    const container = this.notePeekLeafContainer;
 
-    try {
-      if (container && this.notePeekLeafOrigParent) {
-        // Put it back where it came from.
-        const parent = this.notePeekLeafOrigParent;
-        const next = this.notePeekLeafOrigNextSibling;
-        if (next && next.parentNode === parent) parent.insertBefore(container, next);
-        else parent.appendChild(container);
-      }
-    } catch {
-      // ignore
-    }
-
-    try {
-      leaf?.detach?.();
-    } catch {
-      // ignore
-    }
-
-    try {
-      this.notePeekEl?.removeClass('sxdb-notepeek-hasleaf');
-    } catch {
-      // ignore
-    }
-
-    this.notePeekLeaf = null;
-    this.notePeekLeafContainer = null;
-    this.notePeekLeafOrigParent = null;
-    this.notePeekLeafOrigNextSibling = null;
-  }
-
-  private async ensureInlineLeafHost(): Promise<WorkspaceLeaf | null> {
-    if (!this.notePeekBodyEl) return null;
-
-    // Reuse if still valid.
-    if (this.notePeekLeaf && this.isLeafValid(this.notePeekLeaf) && this.notePeekLeafContainer?.isConnected) {
-      return this.notePeekLeaf;
-    }
-
-    // Clean any stale refs.
-    this.cleanupInlineLeaf();
-
-    // Create a fresh leaf. NOTE: Obsidian does not provide a supported public API
-    // to mount a leaf inside an arbitrary div. This is experimental and best-effort.
-    const leaf = this.app.workspace.getLeaf(true);
-    // Prefer the leaf container (includes wrappers). Fall back to view.containerEl.
-    const containerEl: HTMLElement | null | undefined = (leaf as any)?.containerEl ?? (leaf as any)?.view?.containerEl;
-    if (!containerEl) {
-      try {
-        (leaf as any)?.detach?.();
-      } catch {
-        // ignore
-      }
-      return null;
-    }
-
-    // Remember original DOM position so we can restore.
-    this.notePeekLeafOrigParent = containerEl.parentElement;
-    this.notePeekLeafOrigNextSibling = containerEl.nextSibling as any;
-
-    // Move into Note Peek body.
-    try {
-      this.notePeekBodyEl.empty();
-      this.notePeekBodyEl.appendChild(containerEl);
-      this.notePeekEl?.addClass('sxdb-notepeek-hasleaf');
-
-      // Best-effort: ensure the embedded view fills the window.
-      containerEl.style.width = '100%';
-      containerEl.style.height = '100%';
-      window.setTimeout(() => {
-        try {
-          (leaf as any)?.view?.onResize?.();
-        } catch {
-          // ignore
-        }
-      }, 0);
-    } catch {
-      // If we can't mount it, detach the leaf and fall back.
-      try {
-        (leaf as any)?.detach?.();
-      } catch {
-        // ignore
-      }
-      this.notePeekEl?.removeClass('sxdb-notepeek-hasleaf');
-      return null;
-    }
-
-    this.notePeekLeaf = leaf;
-    this.notePeekLeafContainer = containerEl;
-    return leaf;
-  }
 
   private isLeafValid(leaf: WorkspaceLeaf | null | undefined): leaf is WorkspaceLeaf {
     if (!leaf) return false;
@@ -261,9 +149,6 @@ export class LibraryView extends ItemView {
   }
 
   // Ctrl/Cmd-hover markdown preview popover (custom, so it reliably shows _db notes)
-  private hoverMdEl: HTMLDivElement | null = null;
-  private hoverMdTitleEl: HTMLDivElement | null = null;
-  private hoverMdBodyEl: HTMLDivElement | null = null;
   private hoverMdState:
     | {
         id: string;
@@ -274,152 +159,35 @@ export class LibraryView extends ItemView {
         token: number;
       }
     | null = null;
-  private hoverMdHideT: number | null = null;
-  private hoverMdOnDocMouseDown?: (evt: MouseEvent) => void;
-  private hoverMdOnKeyDown?: (evt: KeyboardEvent) => void;
-  private hoverMdOnKeyUp?: (evt: KeyboardEvent) => void;
-  private hoverMdOnScroll?: () => void;
+  private hoverMdEl: HTMLDivElement | null = null;
 
   private readonly DEFAULT_COLUMNS: Record<string, boolean> = {
-    index: true,
-    thumb: true,
-    id: true,
-    author: true,
-    bookmarked: true,
-    caption: false,
-    status: true,
-    rating: true,
-    tags: true,
-    notes: true,
-    product_link: false,
-    author_links: false,
-    platform_targets: false,
-    post_url: false,
-    published_time: false,
-    workflow_log: false,
-    actions: true
+    ...DEFAULT_LIBRARY_COLUMNS,
+    caption: false
   };
 
   private columnOrder: string[] = [];
   private columnWidths: Record<string, number> = {};
 
-  private openExternalUrl(url: string): boolean {
-    const raw = String(url || '').trim();
-    if (!raw) return false;
-    try {
-      const electron = (window as any).require?.('electron');
-      if (electron?.shell?.openExternal) {
-        void electron.shell.openExternal(raw);
-        return true;
-      }
-    } catch {
-      // ignore
-    }
-    return false;
-  }
-
   private hoverEditorCommandId(): string {
-    return 'obsidian-hover-editor:open-current-file-in-new-popover';
+    return hoverEditorCommandIdShared();
   }
 
   private hasHoverEditorInstalled(): boolean {
-    try {
-      const cmds = (this.app as any).commands?.commands as Record<string, any> | undefined;
-      return Boolean(cmds && cmds[this.hoverEditorCommandId()]);
-    } catch {
-      return false;
-    }
+    return hasHoverEditorInstalledShared(this.app);
   }
 
   private async openFileInHoverEditor(file: TFile): Promise<void> {
-    const cmdId = this.hoverEditorCommandId();
-    const commands: any = (this.app as any).commands;
-    if (!commands?.executeCommandById) {
-      new Notice('Cannot open in Hover Editor: command API unavailable.');
-      return;
-    }
-    if (!this.hasHoverEditorInstalled()) {
-      new Notice('Hover Editor plugin is not installed/enabled.');
-      return;
-    }
-
-    // Hover Editor's command opens the *current* file in a new popover.
-    // We'll temporarily open the file in a leaf, run the command, then restore.
-    const ws: any = this.app.workspace as any;
-    const prevLeaf = ws.activeLeaf as any;
-    const prevFile = this.app.workspace.getActiveFile();
-
-    const tempLeaf = this.app.workspace.getLeaf(true);
-    try {
-      await tempLeaf.openFile(file);
-      try {
-        ws.setActiveLeaf?.(tempLeaf, false, true);
-      } catch {
-        // ignore
-      }
-      await commands.executeCommandById(cmdId);
-    } finally {
-      // Close the temporary leaf if possible to avoid clutter.
-      try {
-        (tempLeaf as any)?.detach?.();
-      } catch {
-        // ignore
-      }
-      // Restore previous focus/file.
-      try {
-        if (prevLeaf) ws.setActiveLeaf?.(prevLeaf, false, true);
-      } catch {
-        // ignore
-      }
-      if (prevFile) {
-        // Best-effort: if focus restoration didn't restore the file, re-open it.
-        try {
-          const activeNow = this.app.workspace.getActiveFile();
-          if (activeNow?.path !== prevFile.path && prevLeaf?.openFile) await prevLeaf.openFile(prevFile);
-        } catch {
-          // ignore
-        }
-      }
-    }
+    await openFileInHoverEditorShared(this.app, file);
   }
 
   private openProtocolOrUrl(link: string): void {
-    const raw = String(link || '').trim();
-    if (!raw) return;
-
-    // Custom protocol handlers must be opened as *external URLs*, not file paths.
-    if (/^(sxopen|sxreveal):/i.test(raw)) {
-      try {
-        if (!this.openExternalUrl(raw)) window.open(raw);
-      } catch {
-        window.open(raw);
-      }
-      return;
-    }
-
-    // Normal URLs.
-    if (/^https?:\/\//i.test(raw)) {
-      try {
-        if (!this.openExternalUrl(raw)) window.open(raw);
-      } catch {
-        window.open(raw);
-      }
-      return;
-    }
-
-    // File path fallback.
-    try {
-      (this.app as any).openWithDefaultApp?.(raw);
-    } catch {
-      window.open(raw);
-    }
+    openProtocolOrUrlShared(this.app, link);
   }
 
   private shouldCopyLinkOnClick(evt: MouseEvent): boolean {
     const mode = String((this.plugin.settings as any).libraryLinkCopyModifier || 'ctrl-cmd');
-    if (mode === 'alt') return Boolean((evt as any).altKey);
-    if (mode === 'shift') return Boolean((evt as any).shiftKey);
-    return Boolean((evt as any).ctrlKey) || Boolean((evt as any).metaKey);
+    return shouldCopyLinkOnClickWithMode(mode, evt);
   }
 
   private parseLinksValue(v: unknown): string[] {
@@ -502,33 +270,7 @@ export class LibraryView extends ItemView {
   }
 
   private updateSelectionClasses(table: HTMLTableElement): void {
-    if (!table?.isConnected) return;
-
-    const headers = table.querySelectorAll('thead th[data-col]') as NodeListOf<HTMLTableCellElement>;
-    headers.forEach((th) => {
-      const col = String(th.getAttribute('data-col') || '').trim();
-      if (!col) return;
-      const selected = (col === 'index' && this.tableSelectedAll) || this.selectedCols.has(col);
-      if (selected) th.addClass('sxdb-cell-selected');
-      else th.removeClass('sxdb-cell-selected');
-    });
-
-    const rows = table.querySelectorAll('tbody tr[data-row-id]') as NodeListOf<HTMLTableRowElement>;
-    rows.forEach((tr) => {
-      const rowId = String(tr.getAttribute('data-row-id') || '').trim();
-      if (!rowId) return;
-      const cells = tr.querySelectorAll('td[data-col]') as NodeListOf<HTMLTableCellElement>;
-      cells.forEach((td) => {
-        const col = String(td.getAttribute('data-col') || '').trim();
-        if (!col) return;
-        const selected = this.tableSelectedAll
-          || this.selectedRows.has(rowId)
-          || this.selectedCols.has(col)
-          || this.selectedCells.has(this.cellKey(rowId, col));
-        if (selected) td.addClass('sxdb-cell-selected');
-        else td.removeClass('sxdb-cell-selected');
-      });
-    });
+    applySelectionClasses(table, this.selectedCells, this.selectedRows, this.selectedCols, this.tableSelectedAll);
   }
 
   private clearHoverVideoHideTimer(): void {
@@ -585,18 +327,7 @@ export class LibraryView extends ItemView {
 
   private positionHoverVideo(anchorEl: HTMLElement, video: HTMLVideoElement): void {
     const { w, h } = this.getHoverVideoSizePx();
-    const rect = anchorEl.getBoundingClientRect();
-
-    let x = Math.floor(rect.right + 10);
-    let y = Math.floor(rect.top);
-    if (x + w > window.innerWidth - 8) x = Math.max(8, Math.floor(rect.left - w - 10));
-    if (y + h > window.innerHeight - 8) y = Math.max(8, window.innerHeight - h - 8);
-    if (y < 8) y = 8;
-
-    video.style.left = `${x}px`;
-    video.style.top = `${y}px`;
-    video.style.width = `${Math.floor(w)}px`;
-    video.style.height = `${Math.floor(h)}px`;
+    positionFloatingVideo(anchorEl, video, w, h);
   }
 
   private getHoverVideoSizePx(): { w: number; h: number } {
@@ -613,7 +344,7 @@ export class LibraryView extends ItemView {
     const video = this.ensureHoverVideoElement();
     this.clearHoverVideoHideTimer();
 
-    const src = `${this.baseUrl()}/media/video/${encodeURIComponent(id)}`;
+    const src = this.apiUrl(`/media/video/${encodeURIComponent(id)}`);
     if (video.src !== src) video.src = src;
     video.muted = Boolean(this.plugin.settings.libraryHoverPreviewMuted);
 
@@ -628,35 +359,15 @@ export class LibraryView extends ItemView {
   }
 
   private async ensureFolder(folderPath: string): Promise<TFolder> {
-    const existing = this.app.vault.getAbstractFileByPath(folderPath);
-    if (existing && existing instanceof TFolder) return existing;
-    await this.app.vault.createFolder(folderPath).catch(() => void 0);
-    const created = this.app.vault.getAbstractFileByPath(folderPath);
-    if (!created || !(created instanceof TFolder)) throw new Error(`Failed to create folder: ${folderPath}`);
-    return created;
+    return ensureFolderShared(this.app, folderPath);
+  }
+
+  private collectMarkdownFiles(folder: TFolder): TFile[] {
+    return collectMarkdownFilesShared(folder);
   }
 
   private async clearFolderMarkdown(folderPath: string): Promise<number> {
-    const root = this.app.vault.getAbstractFileByPath(folderPath);
-    if (!root) return 0;
-    const stack: TAbstractFile[] = [root];
-    const toDelete: TFile[] = [];
-    while (stack.length) {
-      const cur = stack.pop();
-      if (!cur) continue;
-      if (cur instanceof TFile) {
-        if (cur.extension === 'md') toDelete.push(cur);
-      } else if (cur instanceof TFolder) {
-        stack.push(...cur.children);
-      }
-    }
-
-    let deleted = 0;
-    for (const f of toDelete) {
-      await this.app.vault.delete(f);
-      deleted += 1;
-    }
-    return deleted;
+    return clearMarkdownInFolderShared(this.app, folderPath);
   }
 
   private q = '';
@@ -675,6 +386,8 @@ export class LibraryView extends ItemView {
   private offset = 0;
   private total = 0;
   private menuHidden = false;
+  private lastMissingMediaNoticeKey = '';
+  private lastMissingMediaNoticeTs = 0;
 
   private authors: ApiAuthor[] = [];
   private authorSel: HTMLSelectElement | null = null;
@@ -938,171 +651,99 @@ export class LibraryView extends ItemView {
     return this.plugin.settings.apiBaseUrl.replace(/\/$/, '');
   }
 
-  private updateStickyOffsets(): void {
-    // Compute exact stacked sticky offsets so headers don't overlap when fonts/themes change.
-    const root = this.contentEl as any as HTMLElement;
-    if (!root?.isConnected) return;
+  private apiUrl(path: string, query: Record<string, string | number | boolean | null | undefined> = {}): string {
+    const p: any = this.plugin as any;
+    if (typeof p.apiUrl === 'function') return p.apiUrl(path, query);
+    const base = this.baseUrl();
+    const qp = new URLSearchParams();
+    for (const [k, v] of Object.entries(query || {})) {
+      if (v == null) continue;
+      qp.set(k, String(v));
+    }
+    const qs = qp.toString();
+    return qs ? `${base}${path}?${qs}` : `${base}${path}`;
+  }
 
-    const menubar = root.querySelector('.sxdb-lib-menubar') as HTMLElement | null;
-    const toolbar = root.querySelector('.sxdb-lib-toolbarrow') as HTMLElement | null;
-    const pager = root.querySelector('.sxdb-lib-pager') as HTMLElement | null;
+  private async apiRequest(args: {
+    path: string;
+    query?: Record<string, string | number | boolean | null | undefined>;
+    method?: string;
+    body?: string;
+    headers?: Record<string, string>;
+  }) {
+    const p: any = this.plugin as any;
+    if (typeof p.apiRequest === 'function') return p.apiRequest(args);
+    return requestUrl({
+      url: this.apiUrl(args.path, args.query || {}),
+      method: args.method,
+      body: args.body,
+      headers: args.headers
+    });
+  }
 
-    const outerHeight = (el: HTMLElement | null): number => {
-      if (!el) return 0;
-      const rect = el.getBoundingClientRect();
-      if (!rect.height) return 0;
-      try {
-        const cs = window.getComputedStyle(el);
-        const mb = parseFloat(cs.marginBottom || '0') || 0;
-        return rect.height + mb;
-      } catch {
-        return rect.height;
+  private async hydrateRoutingDebugLine(debugEl: HTMLDivElement, routing: any): Promise<void> {
+    if (!debugEl?.isConnected) return;
+    const base = String(debugEl.textContent || '').trim();
+    const effectiveSource = String(routing?.effectiveSource || '').trim();
+    const effectiveProfile = Number(routing?.effectiveProfile ?? 0);
+
+    let schema = '';
+    let vaultRoot = '';
+
+    try {
+      const h = await this.apiRequest({ path: '/health' });
+      const j = h?.json as any;
+      schema = String(j?.backend?.schema || '').trim();
+    } catch {
+      // optional debug enrichment only
+    }
+
+    try {
+      const p = await this.apiRequest({ path: '/pipeline/profiles' });
+      const j = p?.json as any;
+      const profiles = Array.isArray(j?.profiles) ? j.profiles : [];
+      let match = profiles.find((row: any) => String(row?.source_id || '').trim() === effectiveSource);
+      if (!match && Number.isFinite(effectiveProfile) && effectiveProfile >= 1) {
+        match = profiles.find((row: any) => Number(row?.index) === Math.floor(effectiveProfile));
       }
-    };
+      vaultRoot = String(match?.src_path || '').trim();
+    } catch {
+      // optional debug enrichment only
+    }
 
-    const hMenubar = outerHeight(menubar);
-    const hToolbar = outerHeight(toolbar);
-    const hPager = outerHeight(pager);
+    if (!debugEl?.isConnected) return;
 
-    const topMenubar = 0;
-    const topToolbar = hMenubar;
-    const topPager = hMenubar + hToolbar;
-    const topThead = hMenubar + hToolbar + hPager;
+    const extras: string[] = [];
+    if (schema) extras.push(`schema=${schema}`);
+    if (vaultRoot) extras.push(`vault_root=${vaultRoot}`);
+    if (extras.length) debugEl.setText(`${base} · ${extras.join(' · ')}`);
 
-    root.style.setProperty('--sxdb-lib-stick-menubar-top', `${Math.max(0, Math.floor(topMenubar))}px`);
-    root.style.setProperty('--sxdb-lib-stick-toolbar-top', `${Math.max(0, Math.floor(topToolbar))}px`);
-    root.style.setProperty('--sxdb-lib-stick-pager-top', `${Math.max(0, Math.floor(topPager))}px`);
-    root.style.setProperty('--sxdb-lib-stick-thead-top', `${Math.max(0, Math.floor(topThead))}px`);
+    const oldTitle = String(debugEl.getAttribute('title') || '').trim();
+    const titleExtras: string[] = [];
+    if (schema) titleExtras.push(`schema=${schema}`);
+    if (vaultRoot) titleExtras.push(`vault_root=${vaultRoot}`);
+    if (titleExtras.length) debugEl.setAttr('title', `${oldTitle}${oldTitle ? ' · ' : ''}${titleExtras.join(' · ')}`);
+  }
+
+  private updateStickyOffsets(): void {
+    const root = this.contentEl as any as HTMLElement;
+    applyStickyOffsets(root);
   }
 
   private applyFreezePanes(table: HTMLTableElement, visibleKeys: string[]): void {
-    if (!table?.isConnected) return;
-
-    // Clear previous freeze styling/attrs.
-    const prev = table.querySelectorAll('[data-sxdb-freeze-col], [data-sxdb-freeze-row]') as any;
-    prev.forEach((el: HTMLElement) => {
-      try {
-        el.removeAttribute('data-sxdb-freeze-col');
-        el.removeAttribute('data-sxdb-freeze-row');
-        el.classList.remove('sxdb-freeze-col');
-        el.classList.remove('sxdb-freeze-row');
-        el.style.removeProperty('left');
-        el.style.removeProperty('top');
-      } catch {
-        // ignore
-      }
-    });
-
-    const resolveCols = (): string[] => {
-      const keys = visibleKeys || [];
-      if (!keys.length) return [];
-
-      const has = (k: string) => keys.includes(k);
-      if (this.freezeCols === 0) return [];
-
-      if (this.freezeCols === 1) {
-        if (has('id')) return ['id'];
-        return [keys[0]];
-      }
-
-      // freezeCols === 2
-      if (has('thumb') && has('id')) return ['thumb', 'id'];
-      return keys.slice(0, 2);
-    };
-
-    const frozenCols = resolveCols();
-    let left = 0;
-    for (let i = 0; i < frozenCols.length; i++) {
-      const key = frozenCols[i];
-      const header = table.querySelector(`thead th[data-col="${key}"]`) as HTMLElement | null;
-      const w = Math.max(
-        0,
-        header ? Math.ceil(header.getBoundingClientRect().width) : Math.ceil(Number(this.columnWidths[key] || 0))
-      );
-
-      const cells = table.querySelectorAll(`[data-col="${key}"]`) as any;
-      cells.forEach((el: HTMLElement) => {
-        try {
-          el.setAttribute('data-sxdb-freeze-col', String(i + 1));
-          el.classList.add('sxdb-freeze-col');
-          el.style.left = `${left}px`;
-        } catch {
-          // ignore
-        }
-      });
-
-      left += w;
-    }
-
-    if (this.freezeFirstRow) {
-      const thead = table.querySelector('thead') as HTMLElement | null;
-      const top = thead ? Math.ceil(thead.getBoundingClientRect().height) : 0;
-      const firstRow = table.querySelector('tbody tr') as HTMLTableRowElement | null;
-      if (firstRow) {
-        const cells = firstRow.querySelectorAll('td') as any;
-        cells.forEach((el: HTMLElement) => {
-          try {
-            el.setAttribute('data-sxdb-freeze-row', '1');
-            el.classList.add('sxdb-freeze-row');
-            el.style.top = `${top}px`;
-          } catch {
-            // ignore
-          }
-        });
-      }
-    }
+    applyFreezePanesLayout(table, visibleKeys, this.freezeCols, this.freezeFirstRow, this.columnWidths);
   }
 
   private async copyToClipboard(text: string): Promise<boolean> {
-    try {
-      await navigator.clipboard.writeText(String(text ?? ''));
-      return true;
-    } catch {
-      return false;
-    }
+    return copyToClipboardShared(String(text ?? ''));
   }
 
   private async findVaultNotesForId(id: string): Promise<TFile[]> {
-    const safeId = String(id || '').trim();
-    if (!safeId) return [];
-
-    const roots = [
-      normalizePath(this.plugin.settings.activeNotesDir),
-      normalizePath(this.plugin.settings.bookmarksNotesDir),
-      normalizePath(this.plugin.settings.authorsNotesDir)
-    ].filter(Boolean);
-
-    const out: TFile[] = [];
-    const seen = new Set<string>();
-
-    // Fast-path known locations.
-    const directCandidates: string[] = [
-      normalizePath(`${this.plugin.settings.activeNotesDir}/${safeId}.md`),
-      normalizePath(`${this.plugin.settings.bookmarksNotesDir}/${safeId}.md`)
-    ];
-    for (const p of directCandidates) {
-      const af = this.app.vault.getAbstractFileByPath(p);
-      if (af && af instanceof TFile) {
-        if (!seen.has(af.path)) {
-          seen.add(af.path);
-          out.push(af);
-        }
-      }
-    }
-
-    // Authors (or any other _db location): scan vault files, but scope to configured roots.
-    const files = this.app.vault.getFiles();
-    for (const f of files) {
-      if (f.extension !== 'md') continue;
-      if (f.basename !== safeId) continue;
-      const p = normalizePath(f.path);
-      if (!roots.some((r) => r && (p === r || p.startsWith(r + '/')))) continue;
-      if (seen.has(f.path)) continue;
-      seen.add(f.path);
-      out.push(f);
-    }
-
-    return out;
+    return findVaultNotesForIdShared(this.app, id, [
+      this.plugin.settings.activeNotesDir,
+      this.plugin.settings.bookmarksNotesDir,
+      this.plugin.settings.authorsNotesDir
+    ]);
   }
 
   private activePinnedPathForId(id: string): string {
@@ -1117,225 +758,15 @@ export class LibraryView extends ItemView {
     return Boolean(af && af instanceof TFile);
   }
 
-  private clearHoverMarkdownHideTimer(): void {
-    if (this.hoverMdHideT != null) {
-      window.clearTimeout(this.hoverMdHideT);
-      this.hoverMdHideT = null;
-    }
-  }
 
-  private scheduleHoverMarkdownHide(delayMs: number = 220): void {
-    this.clearHoverMarkdownHideTimer();
-    this.hoverMdHideT = window.setTimeout(() => {
-      this.hoverMdHideT = null;
-      if (!this.hoverMdState) return;
-      if (this.hoverMdState.onAnchor || this.hoverMdState.onPopover) return;
-      this.closeHoverMarkdownPreview();
-    }, Math.max(0, delayMs));
-  }
 
-  private closeHoverMarkdownPreview(): void {
-    this.clearHoverMarkdownHideTimer();
 
-    if (this.hoverMdOnDocMouseDown) document.removeEventListener('mousedown', this.hoverMdOnDocMouseDown, true);
-    if (this.hoverMdOnKeyDown) document.removeEventListener('keydown', this.hoverMdOnKeyDown, true);
-    if (this.hoverMdOnKeyUp) document.removeEventListener('keyup', this.hoverMdOnKeyUp, true);
-    if (this.hoverMdOnScroll) window.removeEventListener('scroll', this.hoverMdOnScroll, true);
-    this.hoverMdOnDocMouseDown = undefined;
-    this.hoverMdOnKeyDown = undefined;
-    this.hoverMdOnKeyUp = undefined;
-    this.hoverMdOnScroll = undefined;
 
-    if (this.hoverMdEl) {
-      try {
-        this.hoverMdEl.remove();
-      } catch {
-        // ignore
-      }
-    }
 
-    this.hoverMdEl = null;
-    this.hoverMdTitleEl = null;
-    this.hoverMdBodyEl = null;
-    this.hoverMdState = null;
-  }
 
-  private ensureHoverMarkdownPreview(): void {
-    if (this.hoverMdEl && this.hoverMdBodyEl && this.hoverMdTitleEl && this.hoverMdState) {
-      const el = this.hoverMdEl as any as HTMLElement;
-      if (el?.isConnected) return;
-    }
-    this.closeHoverMarkdownPreview();
-
-    const el = document.createElement('div') as HTMLDivElement;
-    el.className = 'sxdb-hovermd';
-    document.body.appendChild(el);
-    this.hoverMdEl = el;
-
-    const header = el.createDiv({ cls: 'sxdb-hovermd-header' });
-    const title = header.createDiv({ cls: 'sxdb-hovermd-title', text: 'Preview' });
-    const btns = header.createDiv({ cls: 'sxdb-hovermd-btns' });
-    const pinBtn = btns.createEl('button', { text: 'Pin' });
-    const openBtn = btns.createEl('button', { text: 'Open' });
-    const closeBtn = btns.createEl('button', { text: '×' });
-    const body = el.createDiv({ cls: 'sxdb-hovermd-body' });
-    body.createEl('em', { text: 'Loading…' });
-
-    this.hoverMdTitleEl = title;
-    this.hoverMdBodyEl = body;
-    this.hoverMdState = { id: '', filePath: '', anchorEl: null, onAnchor: false, onPopover: false, token: 0 };
-
-    // Size (reuse the hover-preview settings so users have one place to tweak)
-    const w = Math.max(220, Number(this.plugin.settings.libraryHoverPreviewWidth ?? 420));
-    const h = Math.max(160, Number(this.plugin.settings.libraryHoverPreviewHeight ?? 320));
-    el.style.width = `${Math.floor(w)}px`;
-    el.style.height = `${Math.floor(h)}px`;
-
-    el.addEventListener('mouseenter', () => {
-      if (!this.hoverMdState) return;
-      this.hoverMdState.onPopover = true;
-      this.clearHoverMarkdownHideTimer();
-    });
-    el.addEventListener('mouseleave', () => {
-      if (!this.hoverMdState) return;
-      this.hoverMdState.onPopover = false;
-      this.scheduleHoverMarkdownHide();
-    });
-
-    closeBtn.addEventListener('click', (evt) => {
-      evt.preventDefault();
-      evt.stopPropagation();
-      this.closeHoverMarkdownPreview();
-    });
-
-    openBtn.addEventListener('click', async (evt) => {
-      evt.preventDefault();
-      evt.stopPropagation();
-      const fp = this.hoverMdState?.filePath;
-      if (!fp) return;
-      const af = this.app.vault.getAbstractFileByPath(fp);
-      if (af && af instanceof TFile) await this.app.workspace.getLeaf(true).openFile(af);
-    });
-
-    pinBtn.addEventListener('click', (evt) => {
-      evt.preventDefault();
-      evt.stopPropagation();
-      const id = this.hoverMdState?.id;
-      if (!id) return;
-      void this.openNotePeekForId(id);
-      this.closeHoverMarkdownPreview();
-    });
-
-    // Dismiss if the user clicks outside the popover (but allow clicking the anchor)
-    this.hoverMdOnDocMouseDown = (evt: MouseEvent) => {
-      const t = evt.target as any;
-      if (!t) return;
-      if (this.hoverMdEl?.contains(t)) return;
-      if (this.hoverMdState?.anchorEl && this.hoverMdState.anchorEl.contains(t)) return;
-      this.closeHoverMarkdownPreview();
-    };
-    document.addEventListener('mousedown', this.hoverMdOnDocMouseDown, true);
-
-    // Escape to close
-    this.hoverMdOnKeyDown = (evt: KeyboardEvent) => {
-      if (evt.key === 'Escape') this.closeHoverMarkdownPreview();
-    };
-    document.addEventListener('keydown', this.hoverMdOnKeyDown, true);
-
-    // If user releases Ctrl/Cmd and isn't hovering the preview or anchor, dismiss.
-    this.hoverMdOnKeyUp = (evt: KeyboardEvent) => {
-      const want = Boolean((evt as any).ctrlKey) || Boolean((evt as any).metaKey);
-      if (want) return;
-      if (!this.hoverMdState) return;
-      if (this.hoverMdState.onPopover || this.hoverMdState.onAnchor) return;
-      this.closeHoverMarkdownPreview();
-    };
-    document.addEventListener('keyup', this.hoverMdOnKeyUp, true);
-
-    // Scrolling tends to move anchors; safest is to dismiss.
-    this.hoverMdOnScroll = () => {
-      this.scheduleHoverMarkdownHide(0);
-    };
-    window.addEventListener('scroll', this.hoverMdOnScroll, true);
-  }
-
-  private positionHoverMarkdownPreview(evt: MouseEvent): void {
-    if (!this.hoverMdEl) return;
-    const rect = this.hoverMdEl.getBoundingClientRect();
-    const w = rect.width || Math.max(220, Number(this.plugin.settings.libraryHoverPreviewWidth ?? 420));
-    const h = rect.height || Math.max(160, Number(this.plugin.settings.libraryHoverPreviewHeight ?? 320));
-    let x = Math.floor(evt.clientX + 16);
-    let y = Math.floor(evt.clientY + 14);
-    x = Math.max(12, Math.min(window.innerWidth - w - 12, x));
-    y = Math.max(12, Math.min(window.innerHeight - h - 12, y));
-    this.hoverMdEl.style.left = `${x}px`;
-    this.hoverMdEl.style.top = `${y}px`;
-  }
-
-  private setHoverMarkdownAnchor(anchorEl: HTMLElement, on: boolean): void {
-    if (!this.hoverMdState) return;
-    if (this.hoverMdState.anchorEl !== anchorEl) return;
-    this.hoverMdState.onAnchor = on;
-    if (on) this.clearHoverMarkdownHideTimer();
-    else this.scheduleHoverMarkdownHide();
-  }
-
-  private async showHoverMarkdownPreview(id: string, evt: MouseEvent, anchorEl: HTMLElement): Promise<void> {
-    this.ensureHoverMarkdownPreview();
-    if (!this.hoverMdEl || !this.hoverMdBodyEl || !this.hoverMdTitleEl || !this.hoverMdState) return;
-
-    this.clearHoverMarkdownHideTimer();
-    this.hoverMdState.anchorEl = anchorEl;
-    this.hoverMdState.onAnchor = true;
-    this.hoverMdState.id = String(id);
-    this.hoverMdState.filePath = '';
-    this.hoverMdState.token += 1;
-    const token = this.hoverMdState.token;
-
-    this.hoverMdTitleEl.setText(`Preview · ${id}`);
-    this.hoverMdBodyEl.empty();
-    this.hoverMdBodyEl.createEl('em', { text: 'Loading…' });
-    this.positionHoverMarkdownPreview(evt);
-
-    const files = await this.findVaultNotesForId(id);
-    const file = files[0];
-    if (!this.hoverMdState || token !== this.hoverMdState.token) return;
-
-    if (!file) {
-      this.hoverMdBodyEl.empty();
-      this.hoverMdBodyEl.createEl('div', { text: 'No _db note found for this ID yet.' });
-      this.hoverMdBodyEl.createEl('div', { text: 'Tip: use Pin/Sync to materialize notes into your vault.' });
-      return;
-    }
-
-    this.hoverMdState.filePath = file.path;
-
-    try {
-      const md = await this.app.vault.read(file);
-      if (!this.hoverMdState || token !== this.hoverMdState.token) return;
-      this.hoverMdBodyEl.empty();
-      await MarkdownRenderer.renderMarkdown(String(md ?? ''), this.hoverMdBodyEl, file.path, this);
-      this.bindRenderedMetadataLinkBehavior(this.hoverMdBodyEl);
-    } catch (e: any) {
-      if (!this.hoverMdState || token !== this.hoverMdState.token) return;
-      this.hoverMdBodyEl.empty();
-      this.hoverMdBodyEl.createEl('pre', { text: `Failed to render note.\n\n${String(e?.message ?? e)}` });
-    }
-  }
 
   private normalizeYamlValue(v: any): any {
-    if (v == null) return null;
-    if (typeof v !== 'string') return v;
-    const s = v.trim();
-    if (!s) return null;
-    if ((s.startsWith('[') && s.endsWith(']')) || (s.startsWith('{') && s.endsWith('}'))) {
-      try {
-        return JSON.parse(s);
-      } catch {
-        return s;
-      }
-    }
-    return s;
+    return normalizeYamlValueShared(v);
   }
 
   private normalizeTagsValue(v: any): string[] | null {
@@ -1503,34 +934,145 @@ export class LibraryView extends ItemView {
     }
   }
 
-  private shouldUseNativeHoverEngine(): boolean {
-    const engine = String((this.plugin.settings as any).libraryIdCtrlHoverPreviewEngine || 'auto');
-    if (engine === 'native') return true;
-    if (engine === 'custom') return false;
-
-    // auto
+  private closeHoverMarkdownPreview(): void {
+    this.hoverMdState = null;
+    if (!this.hoverMdEl) return;
     try {
-      const pp = (this.app as any).internalPlugins?.plugins?.['page-preview'];
-      if (pp && pp.enabled) return true;
+      this.hoverMdEl.remove();
     } catch {
       // ignore
     }
-    return false;
+    this.hoverMdEl = null;
+  }
+
+  private setHoverMarkdownAnchor(anchorEl: HTMLElement, onAnchor: boolean): void {
+    const row = anchorEl.closest('tr[data-row-id]') as HTMLTableRowElement | null;
+    const id = String(row?.getAttribute('data-row-id') || '').trim();
+    if (!id) return;
+
+    if (!onAnchor) {
+      if (this.hoverMdState && this.hoverMdState.id === id) {
+        this.hoverMdState.onAnchor = false;
+        const token = this.hoverMdState.token;
+        window.setTimeout(() => {
+          if (!this.hoverMdState || this.hoverMdState.token !== token) return;
+          if (this.hoverMdState.onAnchor || this.hoverMdState.onPopover) return;
+          this.closeHoverMarkdownPreview();
+        }, 140);
+      }
+      return;
+    }
+
+    const engine = String((this.plugin.settings as any).libraryIdCtrlHoverPreviewEngine || 'auto');
+    const preferNative = engine === 'native' || (engine === 'auto' && this.hasHoverEditorInstalled());
+    if (preferNative) return;
+
+    const token = Date.now();
+    const existing = this.hoverMdState;
+    if (existing && existing.id === id) {
+      existing.anchorEl = anchorEl;
+      existing.onAnchor = true;
+      existing.token = token;
+      return;
+    }
+
+    this.hoverMdState = {
+      id,
+      filePath: '',
+      anchorEl,
+      onAnchor: true,
+      onPopover: false,
+      token
+    };
+
+    void this.openHoverMarkdownPreviewForId(id, anchorEl, token);
+  }
+
+  private async openHoverMarkdownPreviewForId(id: string, anchorEl: HTMLElement, token: number): Promise<void> {
+    const files = await this.findVaultNotesForId(id);
+    const file = files[0];
+    if (!file) return;
+    if (!this.hoverMdState || this.hoverMdState.token !== token || this.hoverMdState.id !== id) return;
+
+    const state = this.hoverMdState;
+    state.filePath = file.path;
+
+    this.closeHoverMarkdownPreview();
+    this.hoverMdState = state;
+
+    const el = document.createElement('div') as HTMLDivElement;
+    el.className = 'sxdb-hovermd';
+
+    const aw = Math.max(320, Number((this.plugin.settings as any).libraryNotePeekWidth ?? 420));
+    const ah = Math.max(220, Number((this.plugin.settings as any).libraryNotePeekHeight ?? 360));
+    const r = anchorEl.getBoundingClientRect();
+    const x = Math.max(8, Math.min(window.innerWidth - aw - 8, Math.floor(r.right + 10)));
+    const y = Math.max(8, Math.min(window.innerHeight - ah - 8, Math.floor(r.top - 8)));
+
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    el.style.width = `${aw}px`;
+    el.style.height = `${ah}px`;
+
+    const header = el.createDiv({ cls: 'sxdb-hovermd-header' });
+    header.createDiv({ cls: 'sxdb-hovermd-title', text: `Preview · ${id}` });
+    const btns = header.createDiv({ cls: 'sxdb-hovermd-btns' });
+    const openBtn = btns.createEl('button', { text: 'Open' });
+    const closeBtn = btns.createEl('button', { text: '×' });
+    const body = el.createDiv({ cls: 'sxdb-hovermd-body' });
+
+    el.addEventListener('mouseenter', () => {
+      if (!this.hoverMdState) return;
+      this.hoverMdState.onPopover = true;
+    });
+    el.addEventListener('mouseleave', () => {
+      if (!this.hoverMdState) return;
+      this.hoverMdState.onPopover = false;
+      const t = this.hoverMdState.token;
+      window.setTimeout(() => {
+        if (!this.hoverMdState || this.hoverMdState.token !== t) return;
+        if (this.hoverMdState.onAnchor || this.hoverMdState.onPopover) return;
+        this.closeHoverMarkdownPreview();
+      }, 140);
+    });
+
+    openBtn.addEventListener('click', async () => {
+      await this.openVaultNoteForId(id);
+      this.closeHoverMarkdownPreview();
+    });
+    closeBtn.addEventListener('click', () => this.closeHoverMarkdownPreview());
+
+    try {
+      const md = await this.app.vault.read(file);
+      const parsed = this.extractFrontmatter(md);
+      const prelude = this.buildPeekPrelude(parsed.fm);
+      await MarkdownRenderer.render(this.app, `${prelude}${parsed.body}`, body, file.path, this);
+      this.bindRenderedMetadataLinkBehavior(body);
+    } catch {
+      body.createEl('pre', { text: 'Failed to render preview.' });
+    }
+
+    document.body.appendChild(el);
+    this.hoverMdEl = el;
   }
 
   private closeNotePeek(): void {
-    if (!this.notePeekEl) return;
-    this.cleanupInlineLeaf();
-    try {
-      this.notePeekEl.remove();
-    } catch {
-      // ignore
+    if (this.notePeekEl) {
+      try {
+        this.notePeekEl.remove();
+      } catch {
+        // ignore
+      }
     }
     this.notePeekEl = null;
     this.notePeekHeaderEl = null;
     this.notePeekBodyEl = null;
     this.notePeekState = null;
   }
+
+
+
+
 
   private ensureNotePeek(): void {
     if (this.notePeekEl) {
@@ -1577,7 +1119,7 @@ export class LibraryView extends ItemView {
       this.notePeekMode = this.notePeekMode === 'source' ? 'preview' : 'source';
       modeBtn.setText(this.notePeekMode === 'source' ? 'Preview' : 'Source');
       const id = this.notePeekState?.id;
-      if (id) await this.openNotePeekForId(id);
+      if (id) void this.openNotePeekForId(id);
     });
 
     hoverBtn?.addEventListener('click', async () => {
@@ -1672,80 +1214,14 @@ export class LibraryView extends ItemView {
   }
 
   private extractFrontmatter(md: string): { fm: Record<string, any> | null; body: string } {
-    const text = String(md ?? '');
-    if (!text.startsWith('---\n')) return { fm: null, body: text };
-    const end = text.indexOf('\n---', 4);
-    if (end === -1) return { fm: null, body: text };
-    const raw = text.slice(4, end + 1);
-    const body = text.slice(end + 4);
-    try {
-      const fm = parseYaml(raw) as any;
-      if (fm && typeof fm === 'object') return { fm: fm as Record<string, any>, body };
-    } catch {
-      // ignore
-    }
-    return { fm: null, body: text };
+    return extractFrontmatterShared(md);
   }
 
   private buildPeekPrelude(fm: Record<string, any> | null): string {
-    if (!fm) return '';
-    const lines: string[] = [];
-
-    const pick = (k: string): string => {
-      const v = (fm as any)[k];
-      if (v == null) return '';
-      const s = String(v).trim();
-      return s;
-    };
-
-    const cover = pick('cover');
-    const video = pick('video');
-    const caption = pick('caption');
-    const videoUrl = pick('video_url');
-    const authorUrl = pick('author_url');
-
-    // If none of our known fields exist, don't add noise.
-    if (!cover && !video && !caption && !videoUrl && !authorUrl) return '';
-
-    lines.push('## Preview');
-    lines.push('');
-
-    if (cover) {
-      // Try to render as an embed so the preview shows the actual image.
-      lines.push('**Cover**');
-      lines.push(`![[${cover}]]`);
-      lines.push('');
-    }
-
-    if (video) {
-      lines.push('**Video**');
-      // Embedding video in reading view can work; if not, it still shows a clickable link.
-      lines.push(`![[${video}]]`);
-      lines.push('');
-    }
-
-    if (caption) {
-      lines.push('**Caption**');
-      lines.push(caption);
-      lines.push('');
-    }
-
-    const links: string[] = [];
-    if (videoUrl) links.push(`- video_url: ${videoUrl}`);
-    if (authorUrl) links.push(`- author_url: ${authorUrl}`);
-    if (links.length) {
-      lines.push('**Links**');
-      lines.push(...links);
-      lines.push('');
-    }
-
-    // Divider between prelude and body.
-    lines.push('---');
-    lines.push('');
-    return lines.join('\n');
+    return buildPeekPreludeShared(fm);
   }
 
-  private async openNotePeekForId(id: string): Promise<void> {
+  private async openNotePeekForId(id: string, evt?: MouseEvent): Promise<void> {
     if (!this.plugin.settings.libraryNotePeekEnabled) {
       new Notice('Pinned Note Peek is disabled in Settings → Views.');
       return;
@@ -1758,112 +1234,58 @@ export class LibraryView extends ItemView {
       return;
     }
 
-    // If user wants to rely on Obsidian's own rendering/modes, delegate to native note views.
     const engine = this.notePeekEngine();
-    if (engine === 'hover-editor') {
-      await this.openFileInHoverEditor(file);
-      return;
-    }
+    
     if (engine === 'popout') {
       await this.openFileInNotePeekPopout(file);
       return;
     }
-
-    this.ensureNotePeek();
-    if (!this.notePeekEl || !this.notePeekBodyEl || !this.notePeekState) return;
-
-    // If a leaf was previously embedded but the engine changed, clean it up.
-    if (engine !== 'inline-leaf' && this.notePeekLeaf) {
-      this.cleanupInlineLeaf();
+    if (engine === 'split') {
+      // Use the dedicated splitting logic from leafUtils instead of getLeaf('split') which is often glitchy in newer Obsidian.
+      await openPinnedFile(this.plugin, file);
+      return;
     }
 
-    // Inline leaf: mount a real Obsidian leaf/view into our window.
-    if (engine === 'inline-leaf') {
-      const leaf = await this.ensureInlineLeafHost();
-      if (!leaf) {
-        new Notice('Inline (Obsidian leaf) could not be mounted. Falling back to Inline renderer.');
-      } else {
-        this.notePeekState.id = String(id);
-        this.notePeekState.filePath = file.path;
-        const title = this.notePeekEl.querySelector('.sxdb-notepeek-title') as HTMLDivElement | null;
-        if (title) title.setText(`Note Peek · ${id}`);
-        try {
-          await leaf.openFile(file);
-          window.setTimeout(() => {
-            try {
-              (leaf as any)?.view?.onResize?.();
-            } catch {
-              // ignore
-            }
-          }, 0);
-          return;
-        } catch {
-          // If leaf open fails, clean up and fall through to inline renderer.
-          this.cleanupInlineLeaf();
-        }
-      }
+    // Inline mode uses SX lightweight renderer directly inside the draggable peek window.
+    this.ensureNotePeek();
+    if (!this.notePeekBodyEl || !this.notePeekState) {
+      new Notice('Inline note peek could not be initialized.');
+      return;
     }
 
     this.notePeekState.id = String(id);
     this.notePeekState.filePath = file.path;
-
-    const title = this.notePeekEl.querySelector('.sxdb-notepeek-title') as HTMLDivElement | null;
+    const title = this.notePeekEl?.querySelector('.sxdb-notepeek-title') as HTMLDivElement | null;
     if (title) title.setText(`Note Peek · ${id}`);
+
+    this.notePeekBodyEl.empty();
 
     try {
       const md = await this.app.vault.read(file);
-      this.notePeekBodyEl.empty();
-
-      // Source vs rendered preview.
+      const parsed = this.extractFrontmatter(md);
       if (this.notePeekMode === 'source') {
-        this.notePeekBodyEl.createEl('pre', { text: String(md ?? '') });
-        return;
+        this.notePeekBodyEl.createEl('pre', { text: md });
+      } else {
+        const content = `${this.buildPeekPrelude(parsed.fm)}${parsed.body}`;
+        await MarkdownRenderer.render(this.app, content, this.notePeekBodyEl, file.path, this);
+        this.bindRenderedMetadataLinkBehavior(this.notePeekBodyEl);
       }
-
-      // Render a "page preview" style view:
-      // - Prefer rendering *the file's content* (body)
-      // - Add a lightweight prelude that visually previews key properties (cover/video/caption)
-      //   because Obsidian's full Properties UI is tied to the MarkdownView pipeline.
-      const { fm, body } = this.extractFrontmatter(String(md ?? ''));
-      const prelude = this.buildPeekPrelude(fm);
-      const renderMd = `${prelude}${body || ''}`;
-      await MarkdownRenderer.renderMarkdown(renderMd, this.notePeekBodyEl, file.path, this);
-      this.bindRenderedMetadataLinkBehavior(this.notePeekBodyEl);
     } catch (e: any) {
-      this.notePeekBodyEl.empty();
-      this.notePeekBodyEl.createEl('pre', {
-        text: `Failed to render note.\n\n${String(e?.message ?? e)}`
-      });
+      this.notePeekBodyEl.createEl('pre', { text: `Failed to render note: ${String(e?.message ?? e)}` });
     }
+
   }
 
+
+
   private async openVaultNoteForId(id: string): Promise<boolean> {
-    const safeId = String(id || '').trim();
-    if (!safeId) return false;
-
-    const candidates: string[] = [
-      normalizePath(`${this.plugin.settings.activeNotesDir}/${safeId}.md`),
-      normalizePath(`${this.plugin.settings.bookmarksNotesDir}/${safeId}.md`)
-    ];
-
-    for (const p of candidates) {
-      const af = this.app.vault.getAbstractFileByPath(p);
-      if (af && af instanceof TFile) {
-        await this.app.workspace.getLeaf(true).openFile(af);
-        return true;
-      }
-    }
-
-    const authorsRoot = normalizePath(this.plugin.settings.authorsNotesDir);
-    const found = this.app.vault
-      .getFiles()
-      .find((f) => f.extension === 'md' && f.basename === safeId && (f.path === authorsRoot || f.path.startsWith(authorsRoot + '/')));
-    if (found) {
-      await this.app.workspace.getLeaf(true).openFile(found);
-      return true;
-    }
-
-    return false;
+    return openVaultNoteForIdShared(
+      this.app,
+      id,
+      this.plugin.settings.activeNotesDir,
+      this.plugin.settings.bookmarksNotesDir,
+      this.plugin.settings.authorsNotesDir
+    );
   }
 
   private slugFolderName(s: string): string {
@@ -1875,26 +1297,243 @@ export class LibraryView extends ItemView {
     return slug || 'unknown';
   }
 
+  private async resolveActiveRoutingPaths(sourceId: string, profileIndex: number): Promise<{
+    label: string;
+    srcPath: string;
+    vaultPath: string;
+    assetsPath: string;
+    candidateMediaRoots: string[];
+  }> {
+    const resp = await this.apiRequest({ path: '/pipeline/profiles' });
+    const payload = (resp?.json || {}) as any;
+    const profiles = Array.isArray(payload?.profiles) ? payload.profiles : [];
+
+    let match = profiles.find((row: any) => String(row?.source_id || '').trim() === String(sourceId || '').trim());
+    if (!match && Number.isFinite(profileIndex) && profileIndex >= 1) {
+      const idx = Math.floor(profileIndex);
+      match = profiles.find((row: any) => Number(row?.index) === idx);
+    }
+
+    const srcPath = String(match?.src_path || '').trim();
+    const vaultPath = String(match?.vault_path || '').trim();
+    const assetsPath = String(match?.assets_path || '').trim();
+    const label = String(match?.label || '').trim();
+
+    const candidateMediaRoots: string[] = [];
+    if (srcPath) {
+      const root = srcPath.replace(/[\\/]+$/, '');
+      candidateMediaRoots.push(
+        `${root}/_db/media_active`,
+        `${root}/_db/media`,
+        `${root}/media_active`,
+        `${root}/media`,
+        `${root}/data`
+      );
+    }
+
+    return { label, srcPath, vaultPath, assetsPath, candidateMediaRoots };
+  }
+
+  private emitRoutingDiagnostics(
+    trigger: 'refresh' | 'sync' | 'manual' | 'clear' | 'targeted-resync',
+    ctx: { profileIndex: number; sourceId: string; schema: string },
+    diag: { label: string; srcPath: string; vaultPath: string; assetsPath: string; candidateMediaRoots: string[] } | null
+  ): void {
+    const route = `source=${ctx.sourceId} profile=#${ctx.profileIndex}${ctx.schema ? ` schema=${ctx.schema}` : ''}`;
+    if (!diag) {
+      console.info(`[sxdb] ${trigger} routing: ${route}`);
+      return;
+    }
+
+    const pathPart = `src=${diag.srcPath || '-'} vault=${diag.vaultPath || '-'}${diag.assetsPath ? ` assets=${diag.assetsPath}` : ''}`;
+    const labelPart = diag.label ? ` label=${diag.label}` : '';
+    const candidates = diag.candidateMediaRoots.length ? ` candidates=${diag.candidateMediaRoots.join(' | ')}` : '';
+    console.info(`[sxdb] ${trigger} routing: ${route}${labelPart} ${pathPart}${candidates}`);
+
+    if (trigger === 'manual' || trigger === 'clear' || trigger === 'targeted-resync') {
+      new Notice(
+        `Routing: ${route} · src=${diag.srcPath || '-'} · vault=${diag.vaultPath || '-'}${diag.assetsPath ? ` · assets=${diag.assetsPath}` : ''}`
+      );
+    }
+  }
+
+  private async ensureAlignedSchemaContext(trigger: 'refresh' | 'sync' | 'manual' | 'clear' | 'targeted-resync'): Promise<{ profileIndex: number; sourceId: string; schema: string }> {
+    const p: any = this.plugin as any;
+    if (typeof p.affirmAlignedSchemaContext !== 'function') {
+      return {
+        profileIndex: Math.max(1, Number((this.plugin.settings as any).launcherProfileIndex || 1)),
+        sourceId: String((this.plugin.settings as any).activeSourceId || 'default'),
+        schema: ''
+      };
+    }
+
+    const aligned = await p.affirmAlignedSchemaContext();
+    let schema = '';
+    try {
+      const health = await this.apiRequest({ path: '/health' });
+      const data = (health?.json || {}) as any;
+      const requestSource = String(data?.source_id || '').trim();
+      schema = String(data?.backend?.schema || '').trim();
+
+      if (requestSource && requestSource !== aligned.sourceId) {
+        throw new Error(`source mismatch after affirm (expected ${aligned.sourceId}, got ${requestSource})`);
+      }
+    } catch (e: any) {
+      throw new Error(`schema preflight failed: ${String(e?.message ?? e)}`);
+    }
+
+    const routed = {
+      profileIndex: Math.max(1, Number(aligned.profileIndex || 1)),
+      sourceId: String(aligned.sourceId || ''),
+      schema,
+    };
+
+    let routingPaths: {
+      label: string;
+      srcPath: string;
+      vaultPath: string;
+      assetsPath: string;
+      candidateMediaRoots: string[];
+    } | null = null;
+    try {
+      routingPaths = await this.resolveActiveRoutingPaths(routed.sourceId, routed.profileIndex);
+    } catch {
+      routingPaths = null;
+    }
+    this.emitRoutingDiagnostics(trigger, routed, routingPaths);
+
+    if (trigger === 'manual' || trigger === 'clear') {
+      new Notice(
+        `Schema context affirmed: profile #${aligned.profileIndex} → ${aligned.sourceId}${schema ? ` · ${schema}` : ''}`
+      );
+    }
+
+    return routed;
+  }
+
+  private parseTrailingProfileIndex(value: unknown): number | null {
+    const s = String(value ?? '').trim().toLowerCase();
+    if (!s) return null;
+    const m = s.match(/(?:^|[_-])(?:p)?(\d{1,2})$/);
+    if (!m) return null;
+    const n = Number(m[1]);
+    if (!Number.isFinite(n) || n < 1) return null;
+    return Math.floor(n);
+  }
+
+  private normalizeSourceId(value: unknown): string {
+    const cleaned = String(value ?? '').trim().replace(/[^a-zA-Z0-9._-]/g, '');
+    return cleaned || 'default';
+  }
+
+  private async targetedResyncAffectedNotes(): Promise<void> {
+    const ctx = await this.ensureAlignedSchemaContext('targeted-resync');
+
+    const activeRoot = normalizePath(this.plugin.settings.activeNotesDir);
+    const root = this.app.vault.getAbstractFileByPath(activeRoot);
+    if (!root || !(root instanceof TFolder)) {
+      new Notice(`Active notes folder not found: ${activeRoot}`);
+      return;
+    }
+
+    const files = this.collectMarkdownFiles(root);
+    if (!files.length) {
+      new Notice('No notes found in active folder.');
+      return;
+    }
+
+    const affected: Array<{ file: TFile; id: string }> = [];
+    for (const f of files) {
+      try {
+        const md = await this.app.vault.read(f);
+        const { fm } = this.extractFrontmatter(md);
+        const id = String((fm as any)?.id || f.basename || '').trim();
+        if (!id) continue;
+        // Targeted source-scoped refresh: rewrite every active-folder note id
+        // against the currently affirmed source. This guarantees replacement of
+        // misbound cached notes even when stale markers are absent.
+        affected.push({ file: f, id });
+      } catch {
+        // Ignore individual parse/read issues.
+      }
+    }
+
+    if (!affected.length) {
+      new Notice(`No eligible notes found for targeted re-sync in ${activeRoot}.`);
+      return;
+    }
+
+    let rewritten = 0;
+    let deleted = 0;
+    let failed = 0;
+    const pathlinkerGroup = this.plugin.getPathlinkerGroupOverride();
+
+    for (const row of affected) {
+      try {
+        const resp = await this.apiRequest({
+          path: `/items/${encodeURIComponent(row.id)}/note`,
+          query: {
+            force: 'true',
+            source_id: ctx.sourceId,
+            ...(pathlinkerGroup ? { pathlinker_group: pathlinkerGroup } : {})
+          }
+        });
+        const data = (resp?.json || {}) as { markdown?: string };
+        const markdown = String(data?.markdown || '');
+        if (!markdown.trim()) {
+          failed += 1;
+          continue;
+        }
+
+        await this.app.vault.modify(row.file, markdown);
+        this.plugin.markRecentlyWritten(row.file.path);
+        await this.normalizeTagsFrontmatterInFile(row.file, markdown);
+        rewritten += 1;
+      } catch (e: any) {
+        const msg = String(e?.message ?? e);
+        if (/404|Not found/i.test(msg)) {
+          try {
+            await this.app.vault.delete(row.file);
+            deleted += 1;
+          } catch {
+            failed += 1;
+          }
+        } else {
+          failed += 1;
+        }
+      }
+    }
+
+    new Notice(
+      `Targeted source re-sync complete: source=${ctx.sourceId}${ctx.schema ? ` · schema=${ctx.schema}` : ''} · scanned ${files.length}, rewritten ${rewritten}, deleted ${deleted}, failed ${failed}.`
+    );
+
+    void this.refresh();
+  }
+
   /** Command hook: materialize current table selection into vault (_db folders). */
   async syncCurrentSelection(): Promise<void> {
+    await this.ensureAlignedSchemaContext('sync');
+
     const batch = Math.max(10, this.plugin.settings.syncBatchSize ?? 200);
     const maxItems = Math.max(0, this.plugin.settings.syncMaxItems ?? 2000);
     const replace = Boolean(this.plugin.settings.syncReplaceOnPull);
     const strategy = String(this.plugin.settings.vaultWriteStrategy || 'split');
+    const force = Boolean(this.plugin.settings.fetchForceRegenerate);
+    const pathlinkerGroup = this.plugin.getPathlinkerGroupOverride();
 
-    const baseParams: string[] = [];
-    baseParams.push(`q=${encodeURIComponent(this.q)}`);
-    baseParams.push(`bookmarked_only=${this.bookmarkedOnly ? 'true' : 'false'}`);
-    baseParams.push(`order=${encodeURIComponent(this.sortOrder)}`);
-    if (this.authorFilter) baseParams.push(`author_unique_id=${encodeURIComponent(this.authorFilter)}`);
-    if (this.statusFilters.size) baseParams.push(`status=${encodeURIComponent(Array.from(this.statusFilters).join(','))}`);
-    if (this.tagFilter.trim()) baseParams.push(`tag=${encodeURIComponent(this.tagFilter.trim())}`);
-    if (this.captionFilter.trim()) baseParams.push(`caption_q=${encodeURIComponent(this.captionFilter.trim())}`);
-    if (this.ratingMin.trim()) baseParams.push(`rating_min=${encodeURIComponent(this.ratingMin.trim())}`);
-    if (this.ratingMax.trim()) baseParams.push(`rating_max=${encodeURIComponent(this.ratingMax.trim())}`);
-    if (this.hasNotesOnly) baseParams.push(`has_notes=true`);
-
-    const baseUrl = this.baseUrl();
+    const baseParams: Record<string, string> = {
+      q: this.q,
+      bookmarked_only: this.bookmarkedOnly ? 'true' : 'false',
+      order: this.sortOrder
+    };
+    if (this.authorFilter) baseParams.author_unique_id = this.authorFilter;
+    if (this.statusFilters.size) baseParams.status = Array.from(this.statusFilters).join(',');
+    if (this.tagFilter.trim()) baseParams.tag = this.tagFilter.trim();
+    if (this.captionFilter.trim()) baseParams.caption_q = this.captionFilter.trim();
+    if (this.ratingMin.trim()) baseParams.rating_min = this.ratingMin.trim();
+    if (this.ratingMax.trim()) baseParams.rating_max = this.ratingMax.trim();
+    if (this.hasNotesOnly) baseParams.has_notes = 'true';
     let offset = 0;
     let written = 0;
     let total = 0;
@@ -1927,9 +1566,16 @@ export class LibraryView extends ItemView {
       }
 
       const limit = maxItems ? Math.min(batch, maxItems - written) : batch;
-      const url = `${baseUrl}/notes?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}&${baseParams.join('&')}`;
-
-      const resp = await requestUrl({ url });
+      const resp = await this.apiRequest({
+        path: '/notes',
+        query: {
+          ...baseParams,
+          ...(force ? { force: 'true' } : {}),
+          ...(pathlinkerGroup ? { pathlinker_group: pathlinkerGroup } : {}),
+          limit: String(limit),
+          offset: String(offset)
+        }
+      });
       const data = resp.json as { notes: ApiNote[]; total: number; offset: number; limit: number };
       const notes = data.notes ?? [];
       total = data.total ?? total;
@@ -1989,26 +1635,27 @@ export class LibraryView extends ItemView {
 
   /** Command hook: refresh current table page from API using current filters. */
   async refresh(): Promise<void> {
+    await this.ensureAlignedSchemaContext('refresh');
+
     const limit = this.pageLimit();
 
-    const params: string[] = [];
-    params.push(`q=${encodeURIComponent(this.q)}`);
-    params.push(`limit=${encodeURIComponent(String(limit))}`);
-    params.push(`offset=${encodeURIComponent(String(this.offset))}`);
-    params.push(`bookmarked_only=${this.bookmarkedOnly ? 'true' : 'false'}`);
-    params.push(`order=${encodeURIComponent(this.sortOrder)}`);
-    if (this.authorFilter) params.push(`author_unique_id=${encodeURIComponent(this.authorFilter)}`);
-    if (this.statusFilters.size) params.push(`status=${encodeURIComponent(Array.from(this.statusFilters).join(','))}`);
-    if (this.tagFilter.trim()) params.push(`tag=${encodeURIComponent(this.tagFilter.trim())}`);
-    if (this.captionFilter.trim()) params.push(`caption_q=${encodeURIComponent(this.captionFilter.trim())}`);
-    if (this.ratingMin.trim()) params.push(`rating_min=${encodeURIComponent(this.ratingMin.trim())}`);
-    if (this.ratingMax.trim()) params.push(`rating_max=${encodeURIComponent(this.ratingMax.trim())}`);
-    if (this.hasNotesOnly) params.push(`has_notes=true`);
-
-    const url = `${this.baseUrl()}/items?${params.join('&')}`;
+    const params: Record<string, string> = {
+      q: this.q,
+      limit: String(limit),
+      offset: String(this.offset),
+      bookmarked_only: this.bookmarkedOnly ? 'true' : 'false',
+      order: this.sortOrder
+    };
+    if (this.authorFilter) params.author_unique_id = this.authorFilter;
+    if (this.statusFilters.size) params.status = Array.from(this.statusFilters).join(',');
+    if (this.tagFilter.trim()) params.tag = this.tagFilter.trim();
+    if (this.captionFilter.trim()) params.caption_q = this.captionFilter.trim();
+    if (this.ratingMin.trim()) params.rating_min = this.ratingMin.trim();
+    if (this.ratingMax.trim()) params.rating_max = this.ratingMax.trim();
+    if (this.hasNotesOnly) params.has_notes = 'true';
 
     try {
-      const resp = await requestUrl({ url });
+      const resp = await this.apiRequest({ path: '/items', query: params });
       const data = resp.json as { items: ApiItem[]; total: number; offset: number; limit: number };
       this.total = data.total ?? 0;
       this.offset = data.offset ?? 0;
@@ -2022,8 +1669,7 @@ export class LibraryView extends ItemView {
 
   private async loadAuthors(): Promise<void> {
     try {
-      const url = `${this.baseUrl()}/authors?limit=2000&offset=0&order=count`;
-      const resp = await requestUrl({ url });
+      const resp = await this.apiRequest({ path: '/authors', query: { limit: '2000', offset: '0', order: 'count' } });
       const data = resp.json as { authors: ApiAuthor[] };
       this.authors = (data?.authors ?? []).filter((a) => a?.author_unique_id);
       this.populateAuthorSelect();
@@ -2078,6 +1724,24 @@ export class LibraryView extends ItemView {
 
     const header = contentEl.createDiv({ cls: 'sxdb-lib-header' });
     header.createEl('h2', { text: 'SX Library (DB)' });
+    const routing = (this.plugin as any).getRoutingDebugInfo?.();
+    if (routing && typeof routing === 'object') {
+      const configuredProfile = routing.configuredProfile != null ? String(routing.configuredProfile) : '—';
+      const effectiveProfile = routing.effectiveProfile != null ? String(routing.effectiveProfile) : '—';
+      const adjusted = Boolean(routing.effectiveSourceAdjusted);
+      const mismatched = Boolean(routing.mismatchDetected);
+      const marker = mismatched ? '⚠' : (adjusted ? '↺' : '•');
+      const line = `source=${routing.configuredSource} · profile=${configuredProfile} · effective_source=${routing.effectiveSource} · effective_profile=${effectiveProfile}`;
+      const debug = header.createDiv({ cls: 'sxdb-lib-routing-debug' });
+      debug.setText(`${marker} ${line}`);
+      if (mismatched) debug.addClass('is-warning');
+      else if (adjusted) debug.addClass('is-adjusted');
+      debug.setAttr(
+        'title',
+        `Alignment: ${routing.alignmentEnabled ? 'on' : 'off'} · Schema guard: ${routing.schemaGuardEnabled ? 'on' : 'off'} · source_idx=${routing.configuredSourceIndex ?? '—'} · effective_source_idx=${routing.effectiveSourceIndex ?? '—'}`
+      );
+      void this.hydrateRoutingDebugLine(debug, routing);
+    }
 
     // Sheets-like top menubar (dropdowns live here so they appear above the table)
     const menubar = contentEl.createDiv({ cls: 'sxdb-lib-menubar' });
@@ -2104,6 +1768,15 @@ export class LibraryView extends ItemView {
     const refreshBtn = menuBtns.createEl('button', { text: 'Refresh', cls: 'sxdb-lib-menubtn' });
     refreshBtn.addEventListener('click', () => void this.refresh());
 
+    const affirmBtn = menuBtns.createEl('button', { text: 'Affirm schema', cls: 'sxdb-lib-menubtn' });
+    affirmBtn.addEventListener('click', () => {
+      void this.ensureAlignedSchemaContext('manual').then(() => {
+        void this.refresh();
+      }).catch((e: any) => {
+        new Notice(`Affirm schema failed: ${String(e?.message ?? e)}`);
+      });
+    });
+
     const syncTopBtn = menuBtns.createEl('button', { text: 'Sync', cls: 'sxdb-lib-menubtn' });
     syncTopBtn.addEventListener('click', () => {
       void this.syncCurrentSelection().catch((e: any) => {
@@ -2113,23 +1786,34 @@ export class LibraryView extends ItemView {
 
     const clearTopBtn = menuBtns.createEl('button', { text: 'Clear', cls: 'sxdb-lib-menubtn' });
     clearTopBtn.addEventListener('click', () => {
-      this.q = '';
-      this.bookmarkedOnly = false;
-      this.bookmarkFrom = '';
-      this.bookmarkTo = '';
-      this.authorFilter = '';
-      this.statusFilters.clear();
-      this.sortOrder = 'bookmarked';
-      this.tagFilter = '';
-      this.captionFilter = '';
-      this.ratingMin = '';
-      this.ratingMax = '';
-      this.hasNotesOnly = false;
-      this.authorSearch = '';
-      this.offset = 0;
-      this.persistLibraryStateDebounced();
-      this.render();
-      void this.refresh();
+      void this.ensureAlignedSchemaContext('clear').then(() => {
+        this.q = '';
+        this.bookmarkedOnly = false;
+        this.bookmarkFrom = '';
+        this.bookmarkTo = '';
+        this.authorFilter = '';
+        this.statusFilters.clear();
+        this.sortOrder = 'bookmarked';
+        this.tagFilter = '';
+        this.captionFilter = '';
+        this.ratingMin = '';
+        this.ratingMax = '';
+        this.hasNotesOnly = false;
+        this.authorSearch = '';
+        this.offset = 0;
+        this.persistLibraryStateDebounced();
+        this.render();
+        void this.refresh();
+      }).catch((e: any) => {
+        new Notice(`Clear failed: ${String(e?.message ?? e)}`);
+      });
+    });
+
+    const clearResyncTopBtn = menuBtns.createEl('button', { text: 'Clear + Re-sync', cls: 'sxdb-lib-menubtn' });
+    clearResyncTopBtn.addEventListener('click', () => {
+      void this.targetedResyncAffectedNotes().catch((e: any) => {
+        new Notice(`Targeted re-sync failed: ${String(e?.message ?? e)}`);
+      });
     });
 
     // Menubar: Data dropdown (currently holds Pin folder info)
@@ -2902,6 +2586,38 @@ export class LibraryView extends ItemView {
       }
     };
 
+    const missingThumbIds = new Set<string>();
+    const notifyMissingThumbs = () => {
+      const count = missingThumbIds.size;
+      if (!count) return;
+
+      const sorted = Array.from(missingThumbIds).sort();
+      const key = `${this.offset}:${this.total}:${sorted.join('|')}`;
+      const now = Date.now();
+      if (this.lastMissingMediaNoticeKey === key && now - this.lastMissingMediaNoticeTs < 20000) return;
+
+      this.lastMissingMediaNoticeKey = key;
+      this.lastMissingMediaNoticeTs = now;
+
+      const sample = sorted.slice(0, 4).join(', ');
+      const more = count > 4 ? ` (+${count - 4} more)` : '';
+      new Notice(`Media not found for ${count} item(s) on this page: ${sample}${more}`);
+    };
+
+    const markThumbMissing = (id: string, td: HTMLTableCellElement, badge: HTMLDivElement, reason: string) => {
+      td.addClass('sxdb-lib-thumb-missing-state');
+      badge.style.display = 'inline-flex';
+      badge.setAttr('title', reason);
+      missingThumbIds.add(id);
+      notifyMissingThumbs();
+    };
+
+    const clearThumbMissing = (id: string, td: HTMLTableCellElement, badge: HTMLDivElement) => {
+      td.removeClass('sxdb-lib-thumb-missing-state');
+      badge.style.display = 'none';
+      missingThumbIds.delete(id);
+    };
+
     for (const [rowIdx, it] of items.entries()) {
       const tr = tbody.createEl('tr');
       tr.setAttr('data-row-id', it.id);
@@ -2987,14 +2703,34 @@ export class LibraryView extends ItemView {
           td.setAttr('data-col', 'thumb');
           td.setAttr('data-row-id', it.id);
           const img = td.createEl('img');
+          const missingBadge = td.createDiv({
+            cls: 'sxdb-lib-thumb-missing',
+            text: 'Media not found'
+          });
+          missingBadge.style.display = 'none';
           img.loading = 'lazy';
           if (it.cover_path) {
-            img.src = `${this.baseUrl()}/media/cover/${encodeURIComponent(it.id)}`;
+            img.src = this.apiUrl(`/media/cover/${encodeURIComponent(it.id)}`);
+            img.addEventListener('load', () => {
+              clearThumbMissing(it.id, td, missingBadge);
+            });
             img.addEventListener('error', () => {
               img.style.display = 'none';
+              markThumbMissing(
+                it.id,
+                td,
+                missingBadge,
+                'Record exists, but thumbnail media file was not found on disk.'
+              );
             });
           } else {
             img.style.display = 'none';
+            markThumbMissing(
+              it.id,
+              td,
+              missingBadge,
+              'Record exists, but no thumbnail path is stored for this item.'
+            );
           }
 
           if (this.plugin.settings.libraryHoverVideoPreview) {
@@ -3018,7 +2754,7 @@ export class LibraryView extends ItemView {
           btn.addEventListener('click', (evt) => {
             // Shift+click opens pinned peek for fast review.
             if ((evt as any)?.shiftKey) {
-              void this.openNotePeekForId(it.id);
+              void this.openNotePeekForId(it.id, evt);
               return;
             }
             void this.openVaultNoteForId(it.id).then((ok) => {
@@ -3035,16 +2771,11 @@ export class LibraryView extends ItemView {
             if (now - lastHoverPreviewAt < 800) return;
             lastHoverPreviewAt = now;
 
-            if (this.shouldUseNativeHoverEngine()) {
-              void this.findVaultNotesForId(it.id).then((files) => {
-                const f = files[0];
-                if (!f) return;
-                this.triggerObsidianHoverPreview(evt, f, btn);
-              });
-              return;
-            }
-
-            void this.showHoverMarkdownPreview(it.id, evt, btn);
+            void this.findVaultNotesForId(it.id).then((files) => {
+              const f = files[0];
+              if (!f) return;
+              this.triggerObsidianHoverPreview(evt, f, btn);
+            });
           };
           btn.addEventListener('mouseenter', (evt) => tryHover(evt as MouseEvent));
           btn.addEventListener('mousemove', (evt) => tryHover(evt as MouseEvent));
@@ -3062,7 +2793,7 @@ export class LibraryView extends ItemView {
             peekBtn.addEventListener('click', (evt) => {
               evt.preventDefault();
               evt.stopPropagation();
-              void this.openNotePeekForId(it.id);
+              void this.openNotePeekForId(it.id, evt);
             });
           }
           continue;
@@ -3372,8 +3103,8 @@ export class LibraryView extends ItemView {
         if (publishedTime) payload.published_time = publishedTime.value.trim() || null;
 
         try {
-          await requestUrl({
-            url: `${this.baseUrl()}/items/${encodeURIComponent(it.id)}/meta`,
+          await this.apiRequest({
+            path: `/items/${encodeURIComponent(it.id)}/meta`,
             method: 'PUT',
             body: JSON.stringify(payload),
             headers: { 'Content-Type': 'application/json' }
@@ -3410,14 +3141,14 @@ export class LibraryView extends ItemView {
       publishedTime?.addEventListener('change', () => void saveMeta());
 
       previewBtn?.addEventListener('click', () => {
-        const url = `${this.baseUrl()}/media/video/${encodeURIComponent(it.id)}`;
+        const url = this.apiUrl(`/media/video/${encodeURIComponent(it.id)}`);
         window.open(url);
       });
 
       const openOrReveal = async (kind: 'open' | 'reveal') => {
         try {
           // Prefer dedicated endpoint that computes links from canonical paths.
-          const linksResp = await requestUrl({ url: `${this.baseUrl()}/items/${encodeURIComponent(it.id)}/links` });
+          const linksResp = await this.apiRequest({ path: `/items/${encodeURIComponent(it.id)}/links` });
           const links = linksResp.json as any;
           const link = kind === 'open' ? String(links?.sxopen_video ?? '') : String(links?.sxreveal_video ?? '');
           if (link) {
@@ -3429,7 +3160,7 @@ export class LibraryView extends ItemView {
         }
 
         try {
-          const resp = await requestUrl({ url: `${this.baseUrl()}/items/${encodeURIComponent(it.id)}/note` });
+          const resp = await this.apiRequest({ path: `/items/${encodeURIComponent(it.id)}/note` });
           const md = (resp.json as any)?.markdown as string;
           if (!md) throw new Error('API returned no markdown');
           const link = parseLinkFromNoteFrontmatter(md, kind);
@@ -3448,7 +3179,7 @@ export class LibraryView extends ItemView {
 
       pinBtn?.addEventListener('click', async () => {
         try {
-          const resp = await requestUrl({ url: `${this.baseUrl()}/items/${encodeURIComponent(it.id)}/note` });
+          const resp = await this.apiRequest({ path: `/items/${encodeURIComponent(it.id)}/note` });
           const md = (resp.json as any)?.markdown as string;
           if (!md) throw new Error('API returned no markdown');
 
@@ -3510,5 +3241,7 @@ export class LibraryView extends ItemView {
     // Apply freeze panes (sticky columns/rows) after the table is populated.
     window.requestAnimationFrame(() => this.applyFreezePanes(table, visibleKeys));
     this.updateSelectionClasses(table);
+
+    if (missingThumbIds.size > 0) notifyMissingThumbs();
   }
 }

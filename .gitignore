@@ -46,6 +46,8 @@ data/*.sqlite3
 
 # Runtime logs (kept local; avoid committing)
 _logs/
+.sxctl/
+_sxdb*.log
 
 # Obsidian plugin build artifacts
 obsidian-plugin/node_modules/
@@ -55,7 +57,7 @@ obsidian-plugin/dist/
 
 # markdownlint cache
 .markdownlint_cache
-rough_works.md
+rough_works00.md
 
 # packaged releases
 *.zip
@@ -65,3 +67,12 @@ rough_works.md
 # dir
 dist/
 data/
+docs/assets/
+prisma/
+
+# Local visual/debug artifacts
+assets/Screenshot*.png
+
+# Generated exports (can be huge and environment-specific)
+exports/*.jsonl.gz
+

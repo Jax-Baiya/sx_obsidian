@@ -76,3 +76,6 @@ assets/Screenshot*.png
 # Generated exports (can be huge and environment-specific)
 exports/*.jsonl.gz
 
+# Temporary local utility scripts
+tools/*_tmp.py
+

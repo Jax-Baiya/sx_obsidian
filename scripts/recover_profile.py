@@ -114,14 +114,29 @@ def delete_vault_markdown(vault_path: str) -> tuple[int, int]:
     if not vault_path:
         return 0, 0
     root = Path(vault_path) / "_db"
-    if not root.exists() or not root.is_dir():
+    try:
+        exists = root.exists()
+        is_dir = root.is_dir()
+    except OSError as e:
+        print(f"PROFILE_RECOVERY_WARN vault_unreachable path={root} error={e}")
+        return 0, 0
+
+    if not exists or not is_dir:
         return 0, 0
 
     removed = 0
-    for p in sorted(root.rglob("*.md")):
-        p.unlink(missing_ok=True)
-        removed += 1
-    remaining = len(list(root.rglob("*.md")))
+    try:
+        for p in sorted(root.rglob("*.md")):
+            try:
+                p.unlink(missing_ok=True)
+                removed += 1
+            except OSError as e:
+                print(f"PROFILE_RECOVERY_WARN md_delete_failed path={p} error={e}")
+        remaining = len(list(root.rglob("*.md")))
+    except OSError as e:
+        print(f"PROFILE_RECOVERY_WARN vault_scan_failed path={root} error={e}")
+        return removed, 0
+
     return removed, remaining
 
 

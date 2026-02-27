@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 
-REPO_ROOT="/home/An_Xing/projects/ANA/core/portfolio/sx_obsidian"
+REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME}")/../.." && pwd)"
 CONTEXT_FILE="$REPO_ROOT/.sxctl/context.env"
 CONTEXT_JSON="$REPO_ROOT/.sxctl/context.json"
 
@@ -42,7 +42,7 @@ teardown() {
 }
 
 @test "profile adapter respects explicit SX_PROFILE_INDEX" {
-  run bash -lc 'cd /home/An_Xing/projects/ANA/core/portfolio/sx_obsidian && source ./scripts/profile_adapter.sh && export SX_PROFILE_INDEX=2 && sx_profile_apply && echo "IDX=$SX_PROFILE_INDEX SID=$SX_PA_SOURCE_ID"'
+  run bash -lc "cd '$REPO_ROOT' && source ./scripts/profile_adapter.sh && export SX_PROFILE_INDEX=2 && sx_profile_apply && echo \"IDX=\$SX_PROFILE_INDEX SID=\$SX_PA_SOURCE_ID\""
   [ "$status" -eq 0 ]
   [[ "$output" == *"IDX=2 SID=assets_2"* ]]
 }
@@ -53,17 +53,17 @@ teardown() {
     SXCTL_PROFILE_INDEX=2 \
     SXCTL_VAULT_ROOT="$TEST_VAULT" \
     SXCTL_DB_BACKEND=sqlite \
-    bash -lc 'cd /home/An_Xing/projects/ANA/core/portfolio/sx_obsidian && ./sxctl.sh context init'
+    bash -lc "cd '$REPO_ROOT' && ./sxctl.sh context init"
 
   [ "$status" -eq 0 ]
 
-  run bash -lc 'grep -E "^SXCTL_PROFILE_INDEX=2$" /home/An_Xing/projects/ANA/core/portfolio/sx_obsidian/.sxctl/context.env'
+  run bash -lc "grep -E '^SXCTL_PROFILE_INDEX=2$' '$CONTEXT_FILE'"
   [ "$status" -eq 0 ]
 
-  run bash -lc 'grep -E "^SXCTL_DB_BACKEND=sqlite$" /home/An_Xing/projects/ANA/core/portfolio/sx_obsidian/.sxctl/context.env'
+  run bash -lc "grep -E '^SXCTL_DB_BACKEND=sqlite$' '$CONTEXT_FILE'"
   [ "$status" -eq 0 ]
 
-  run bash -lc 'grep -E "^SXCTL_DB_PATH=data/sx_obsidian_assets_2.db$" /home/An_Xing/projects/ANA/core/portfolio/sx_obsidian/.sxctl/context.env'
+  run bash -lc "grep -E '^SXCTL_DB_PATH=data/sx_obsidian_assets_2.db$' '$CONTEXT_FILE'"
   [ "$status" -eq 0 ]
 }
 
@@ -73,7 +73,7 @@ teardown() {
     SXCTL_PROFILE_INDEX=1 \
     SXCTL_VAULT_ROOT=/definitely/invalid/vault \
     SXCTL_DB_BACKEND=sqlite \
-    bash -lc 'cd /home/An_Xing/projects/ANA/core/portfolio/sx_obsidian && ./sxctl.sh context init'
+    bash -lc "cd '$REPO_ROOT' && ./sxctl.sh context init"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"Invalid vault root"* ]]
@@ -87,17 +87,17 @@ teardown() {
     SXCTL_VAULT_ROOT="$TEST_VAULT" \
     SXCTL_DB_BACKEND=postgres \
     SXCTL_DB_PROFILE=LOCAL_3 \
-    bash -lc 'cd /home/An_Xing/projects/ANA/core/portfolio/sx_obsidian && ./sxctl.sh context init'
+    bash -lc "cd '$REPO_ROOT' && ./sxctl.sh context init"
 
   [ "$status" -eq 0 ]
 
-  run bash -lc 'grep -E "^SXCTL_DB_BACKEND=postgres$" /home/An_Xing/projects/ANA/core/portfolio/sx_obsidian/.sxctl/context.env'
+  run bash -lc "grep -E '^SXCTL_DB_BACKEND=postgres$' '$CONTEXT_FILE'"
   [ "$status" -eq 0 ]
 
-  run bash -lc 'grep -E "^SXCTL_PIPELINE_DB_PROFILE=LOCAL_3$" /home/An_Xing/projects/ANA/core/portfolio/sx_obsidian/.sxctl/context.env'
+  run bash -lc "grep -E '^SXCTL_PIPELINE_DB_PROFILE=LOCAL_3$' '$CONTEXT_FILE'"
   [ "$status" -eq 0 ]
 
-  run bash -lc 'grep -E "^SXCTL_PIPELINE_DB_MODE=LOCAL$" /home/An_Xing/projects/ANA/core/portfolio/sx_obsidian/.sxctl/context.env'
+  run bash -lc "grep -E '^SXCTL_PIPELINE_DB_MODE=LOCAL$' '$CONTEXT_FILE'"
   [ "$status" -eq 0 ]
 }
 
@@ -107,14 +107,14 @@ teardown() {
     PROFILE_INDEX=2 \
     VAULT_ROOT="$TEST_VAULT" \
     DB_BACKEND=sqlite \
-    bash -lc 'cd /home/An_Xing/projects/ANA/core/portfolio/sx_obsidian && ./sxctl.sh context init'
+    bash -lc "cd '$REPO_ROOT' && ./sxctl.sh context init"
 
   [ "$status" -eq 0 ]
 
-  run bash -lc 'grep -E "^SXCTL_PROFILE_INDEX=2$" /home/An_Xing/projects/ANA/core/portfolio/sx_obsidian/.sxctl/context.env'
+  run bash -lc "grep -E '^SXCTL_PROFILE_INDEX=2$' '$CONTEXT_FILE'"
   [ "$status" -eq 0 ]
 
-  run bash -lc 'awk -F= "/^SXCTL_VAULT_ROOT=/{print substr(\$0, index(\$0,\"=\")+1)}" /home/An_Xing/projects/ANA/core/portfolio/sx_obsidian/.sxctl/context.env'
+  run bash -lc "awk -F= '/^SXCTL_VAULT_ROOT=/{print substr(\$0, index(\$0,\"=\")+1)}' '$CONTEXT_FILE'"
   [ "$status" -eq 0 ]
   [ "$output" = "$TEST_VAULT" ]
 }
@@ -125,21 +125,21 @@ teardown() {
     SXCTL_PROFILE_INDEX=1 \
     SXCTL_VAULT_ROOT="$TEST_VAULT" \
     SXCTL_DB_BACKEND=sqlite \
-    bash -lc 'cd /home/An_Xing/projects/ANA/core/portfolio/sx_obsidian && ./sxctl.sh context init'
+    bash -lc "cd '$REPO_ROOT' && ./sxctl.sh context init"
 
   [ "$status" -eq 0 ]
 
-  run bash -lc 'test -f /home/An_Xing/projects/ANA/core/portfolio/sx_obsidian/.sxctl/context.json'
+  run bash -lc "test -f '$CONTEXT_JSON'"
   [ "$status" -eq 0 ]
 
-  run bash -lc 'python3 - <<"PY"
+  run bash -lc "python3 - <<'PY'
 import json
-f="/home/An_Xing/projects/ANA/core/portfolio/sx_obsidian/.sxctl/context.json"
+f='${CONTEXT_JSON}'
 d=json.load(open(f,"r",encoding="utf-8"))
 assert str(d.get("SXCTL_PROFILE_INDEX"))=="1"
 assert str(d.get("SXCTL_DB_BACKEND"))=="sqlite"
 print("ok")
-PY'
+PY"
   [ "$status" -eq 0 ]
   [[ "$output" == *"ok"* ]]
 }

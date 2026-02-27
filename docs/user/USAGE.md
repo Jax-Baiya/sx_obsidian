@@ -14,7 +14,7 @@ If your vault struggles to load with `_db/media` at 14k+ notes, use the **SQLite
 1. Deploy:
 
 ```bash
-./deploy.sh
+./scripts/deploy.sh
 ```
 
 2. Configure:
@@ -46,13 +46,13 @@ LOG_DIR=_logs
 3. Dry-run a small sample:
 
 ```bash
-./run.sh --mode sync --limit 25 --dry-run
+./scripts/run.sh --mode sync --limit 25 --dry-run
 ```
 
 4. Full sync:
 
 ```bash
-./run.sh --mode sync
+./scripts/run.sh --mode sync
 ```
 
 ## Quickstart (SQLite + API + Obsidian plugin) ⭐
@@ -66,7 +66,7 @@ This path is designed to keep Obsidian fast:
 1. Deploy with dev tooling (installs API/CLI deps too):
 
 ```bash
-./deploy.sh --dev
+./scripts/deploy.sh --dev
 ```
 
 2. Initialize + import database (reads the same `.env` CSV paths):
@@ -93,17 +93,17 @@ Source-aware import example:
 From the `sx_obsidian` repo root you can use:
 
 ```bash
-./sxctl.sh api serve
+./scripts/sxctl.sh api serve
 ```
 
 And for plugin updates:
 
 ```bash
 export OBSIDIAN_VAULT_PATH=/mnt/t/AlexNova
-./sxctl.sh plugin update
+./scripts/sxctl.sh plugin update
 ```
 
-Interactive target selection is available in `./sxctl.sh` menu mode.
+Interactive target selection is available in `./scripts/sxctl.sh` menu mode.
 You can choose:
 
 - profile index from detected `SRC_PATH_N` / `SRC_PROFILE_N`
@@ -111,7 +111,7 @@ You can choose:
 - vault override
 - pipeline DB mode (`LOCAL|SESSION|TRANSACTION`) or explicit DB alias
 
-Tip: the `Makefile` wraps the same flow (`make api-init`, `make api-import`, `make api-serve`, `make plugin-build`, `make plugin-install`).
+Tip: `scripts/Makefile` wraps the same flow (`make -f scripts/Makefile api-init`, `make -f scripts/Makefile api-import`, `make -f scripts/Makefile api-serve`, `make -f scripts/Makefile plugin-build`, `make -f scripts/Makefile plugin-install`).
 
 The plugin does **not** need to be “launched” each time.
 
@@ -147,7 +147,7 @@ See also: [SQLite DB + Plugin](PLUGIN_DB.md)
 
 ## Generator CLI options (python -m sx)
 
-These are the options supported by `./run.sh` (which runs `python -m sx`).
+These are the options supported by `./scripts/run.sh` (which runs `python -m sx`).
 
 | Option             | Description                                                                   |
 | ------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------- |
@@ -247,7 +247,7 @@ VAULT_personal=/mnt/f/PersonalVault
 Run with:
 
 ```bash
-./run.sh --profile work --mode sync
+./scripts/run.sh --profile work --mode sync
 ```
 
 ## Where outputs go (and why it matters)

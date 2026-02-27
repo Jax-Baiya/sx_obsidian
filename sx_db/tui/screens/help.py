@@ -53,7 +53,7 @@ def show_help(router: Router) -> str | None:
   [cyan]sxdb find "query"[/cyan]      Search
   [cyan]sxdb run[/cyan]               Start API
 
-[dim]Install alias: bash install_alias.sh[/dim]
+[dim]Install alias: bash scripts/install_alias.sh[/dim]
 [dim]For more info, see: docs/USAGE.md[/dim]
 """
     

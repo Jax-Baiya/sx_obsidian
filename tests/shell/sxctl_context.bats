@@ -66,7 +66,7 @@ teardown() {
     SXCTL_PROFILE_INDEX=2 \
     SXCTL_VAULT_ROOT="$TEST_VAULT" \
     SXCTL_DB_BACKEND=sqlite \
-    bash -lc "cd '$REPO_ROOT' && ./sxctl.sh context init"
+    bash -lc "cd '$REPO_ROOT' && ./scripts/sxctl.sh context init"
 
   [ "$status" -eq 0 ]
 
@@ -86,7 +86,7 @@ teardown() {
     SXCTL_PROFILE_INDEX=1 \
     SXCTL_VAULT_ROOT=/definitely/invalid/vault \
     SXCTL_DB_BACKEND=sqlite \
-    bash -lc "cd '$REPO_ROOT' && ./sxctl.sh context init"
+    bash -lc "cd '$REPO_ROOT' && ./scripts/sxctl.sh context init"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"Invalid vault root"* ]]
@@ -100,7 +100,7 @@ teardown() {
     SXCTL_VAULT_ROOT="$TEST_VAULT" \
     SXCTL_DB_BACKEND=postgres \
     SXCTL_DB_PROFILE=LOCAL_3 \
-    bash -lc "cd '$REPO_ROOT' && ./sxctl.sh context init"
+    bash -lc "cd '$REPO_ROOT' && ./scripts/sxctl.sh context init"
 
   [ "$status" -eq 0 ]
 
@@ -120,7 +120,7 @@ teardown() {
     PROFILE_INDEX=2 \
     VAULT_ROOT="$TEST_VAULT" \
     DB_BACKEND=sqlite \
-    bash -lc "cd '$REPO_ROOT' && ./sxctl.sh context init"
+    bash -lc "cd '$REPO_ROOT' && ./scripts/sxctl.sh context init"
 
   [ "$status" -eq 0 ]
 
@@ -138,7 +138,7 @@ teardown() {
     SXCTL_PROFILE_INDEX=1 \
     SXCTL_VAULT_ROOT="$TEST_VAULT" \
     SXCTL_DB_BACKEND=sqlite \
-    bash -lc "cd '$REPO_ROOT' && ./sxctl.sh context init"
+    bash -lc "cd '$REPO_ROOT' && ./scripts/sxctl.sh context init"
 
   [ "$status" -eq 0 ]
 

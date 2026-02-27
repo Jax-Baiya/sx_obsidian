@@ -211,7 +211,7 @@ If command names differ in your environment, check Obsidian **Command Palette** 
 
 ## Troubleshooting: plugin install path error
 
-If `./sxctl.sh` fails with:
+If `./scripts/sxctl.sh` fails with:
 
 - `mkdir: cannot create directory ... No such device`
 
@@ -220,7 +220,7 @@ it usually means `OBSIDIAN_VAULT_PATH` points to a mount/path not available in y
 Quick fix:
 
 1. Use the real vault path for your current OS/shell (Linux/WSL path).
-2. Re-run `./sxctl.sh` and provide that path when prompted.
+2. Re-run `./scripts/sxctl.sh` and provide that path when prompted.
 3. Or set it explicitly before install:
 
 - `export OBSIDIAN_VAULT_PATH="/your/real/vault/path"`

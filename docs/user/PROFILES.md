@@ -13,8 +13,8 @@ VAULT_personal=/mnt/f/PersonalVault
 VAULT_work=/mnt/g/WorkVault
 ```
 
-Run personal sync: `./run.sh --profile personal`
-Run work sync: `./run.sh --profile work`
+Run personal sync: `./scripts/run.sh --profile personal`
+Run work sync: `./scripts/run.sh --profile work`
 
 ### Scenario B: Testing New Schemas
 
@@ -26,7 +26,7 @@ VAULT_dev=/mnt/t/AlexNova
 DB_DIR_dev=_db/test_media
 ```
 
-Run: `./run.sh --profile dev`
+Run: `./scripts/run.sh --profile dev`
 
 ## Safety Rules
 
@@ -37,7 +37,7 @@ Run: `./run.sh --profile dev`
 
 When one profile is contaminated or out-of-sync, use the profile-targeted recovery flow (no cross-profile reset):
 
-- Preview target first: `make recover-profile-dry N=2`
-- Execute recovery: `make recover-profile N=2`
+- Preview target first: `make -f scripts/Makefile recover-profile-dry N=2`
+- Execute recovery: `make -f scripts/Makefile recover-profile N=2`
 
 Full guide: [`PROFILE_RECOVERY.md`](PROFILE_RECOVERY.md)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 # shellcheck disable=SC1091
@@ -988,7 +988,7 @@ run_make_action() {
   ensure_context
   sx_profile_apply
   sx_profile_print_context "$label"
-  make "$target"
+  make -f "$ROOT_DIR/scripts/Makefile" "$target"
 }
 
 run_context_python() {
@@ -1148,7 +1148,7 @@ verify_run() {
   export SXCTL_NONINTERACTIVE=1
 
   say "[1/8] Shell syntax checks"
-  bash -n "$ROOT_DIR/sxctl.sh" "$ROOT_DIR/scripts/profile_adapter.sh"
+  bash -n "$ROOT_DIR/scripts/sxctl.sh" "$ROOT_DIR/scripts/profile_adapter.sh"
 
   say "[2/8] Targeted Python tests"
   "$py" -m pytest -q \
@@ -1157,26 +1157,26 @@ verify_run() {
     tests/test_postgres_schema_utils.py
 
   say "[3/8] Context init (postgres_primary)"
-  SXCTL_PROFILE_INDEX=2 SXCTL_VAULT_ROOT="$tmpv" SXCTL_DB_BACKEND=postgres_primary SXCTL_DB_PROFILE=LOCAL_2 "$ROOT_DIR/sxctl.sh" context init
+  SXCTL_PROFILE_INDEX=2 SXCTL_VAULT_ROOT="$tmpv" SXCTL_DB_BACKEND=postgres_primary SXCTL_DB_PROFILE=LOCAL_2 "$ROOT_DIR/scripts/sxctl.sh" context init
 
   say "[4/8] PG init/import"
-  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/sxctl.sh" api init
-  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/sxctl.sh" api import
+  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/scripts/sxctl.sh" api init
+  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/scripts/sxctl.sh" api import
 
   say "[5/8] Context init (sqlite)"
-  SXCTL_PROFILE_INDEX=1 SXCTL_VAULT_ROOT="$tmpv" SXCTL_DB_BACKEND=sqlite "$ROOT_DIR/sxctl.sh" context init
+  SXCTL_PROFILE_INDEX=1 SXCTL_VAULT_ROOT="$tmpv" SXCTL_DB_BACKEND=sqlite "$ROOT_DIR/scripts/sxctl.sh" context init
 
   say "[6/8] SQLite init/import"
-  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/sxctl.sh" api init
-  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/sxctl.sh" api import
+  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/scripts/sxctl.sh" api init
+  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/scripts/sxctl.sh" api import
 
   say "[7/8] API lifecycle"
-  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/sxctl.sh" api serve-bg
-  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/sxctl.sh" api server-status
-  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/sxctl.sh" api stop
+  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/scripts/sxctl.sh" api serve-bg
+  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/scripts/sxctl.sh" api server-status
+  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/scripts/sxctl.sh" api stop
 
   say "[8/8] Diagnostics"
-  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/sxctl.sh" diagnostics
+  SXCTL_NONINTERACTIVE=1 "$ROOT_DIR/scripts/sxctl.sh" diagnostics
 
   export SXCTL_NONINTERACTIVE="$old_nonint"
   rm -rf "$tmpv"
@@ -1186,7 +1186,7 @@ verify_run() {
 
 ensure_venv() {
   if [ ! -x "./.venv/bin/python" ]; then
-    die "Missing .venv. Run: ./scripts/bootstrap.sh (or make bootstrap)"
+    die "Missing .venv. Run: ./scripts/bootstrap.sh (or make -f scripts/Makefile bootstrap)"
   fi
 }
 
@@ -1281,14 +1281,14 @@ menu_loop() {
 help() {
   cat <<'EOF'
 Usage:
-  ./sxctl.sh
-  ./sxctl.sh menu
-  ./sxctl.sh verify
-  ./sxctl.sh context init
-  ./sxctl.sh context show
-  ./sxctl.sh diagnostics
-  ./sxctl.sh api <serve|serve-bg|stop|server-status|init|import|status|menu>
-  ./sxctl.sh plugin <update|build|install>
+  ./scripts/sxctl.sh
+  ./scripts/sxctl.sh menu
+  ./scripts/sxctl.sh verify
+  ./scripts/sxctl.sh context init
+  ./scripts/sxctl.sh context show
+  ./scripts/sxctl.sh diagnostics
+  ./scripts/sxctl.sh api <serve|serve-bg|stop|server-status|init|import|status|menu>
+  ./scripts/sxctl.sh plugin <update|build|install>
 
 Notes:
 - Context is persisted in ./.sxctl/context.env and reused across actions.
@@ -1369,7 +1369,7 @@ case "$cmd" in
         out="./_logs/sx_db_api.nohup.out"
 
         if port_in_use "${SX_API_PORT:-8123}"; then
-          die "API port ${SX_API_PORT:-8123} already in use; stop existing server first (./sxctl.sh api stop)."
+          die "API port ${SX_API_PORT:-8123} already in use; stop existing server first (./scripts/sxctl.sh api stop)."
         fi
 
         if [ -f "$pidfile" ]; then
@@ -1446,15 +1446,15 @@ case "$cmd" in
     case "$sub" in
       update)
         sx_profile_print_context "plugin update"
-        make plugin-build plugin-install
+        make -f "$ROOT_DIR/scripts/Makefile" plugin-build plugin-install
         ;;
       build)
         sx_profile_print_context "plugin build"
-        make plugin-build
+        make -f "$ROOT_DIR/scripts/Makefile" plugin-build
         ;;
       install)
         sx_profile_print_context "plugin install"
-        make plugin-install
+        make -f "$ROOT_DIR/scripts/Makefile" plugin-install
         ;;
       *)
         die "Unknown plugin subcommand: $sub"
@@ -1463,6 +1463,6 @@ case "$cmd" in
     ;;
 
   *)
-    die "Unknown command: $cmd (run ./sxctl.sh --help)"
+    die "Unknown command: $cmd (run ./scripts/sxctl.sh --help)"
     ;;
 esac

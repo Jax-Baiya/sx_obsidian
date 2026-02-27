@@ -13,7 +13,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SXCTL = ROOT / "sxctl.sh"
+SXCTL = ROOT / "scripts" / "sxctl.sh"
 SXCTL_DIR = ROOT / ".sxctl"
 LOGS_DIR = ROOT / "_logs"
 

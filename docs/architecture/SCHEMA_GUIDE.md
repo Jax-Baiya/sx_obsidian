@@ -33,8 +33,8 @@ hearts: <number>
 videos_count: <number>
 
 # === Workflow (USER-EDITABLE) ===
-status: raw            # raw | reviewed | scheduled | published
-bookmarked: true       
+status: raw # raw | reviewed | scheduled | published
+bookmarked: true
 bookmark_timestamp: <ISO-8601 or null>
 scheduled_time: <ISO-8601 or null>
 product_link: <url or null>
@@ -53,13 +53,17 @@ files_seen: []
 ## Field Ownership & Preservation
 
 ### 🔒 Script-Owned
+
 These fields are overwritten on every sync. **Do not edit manually**:
+
 - Media paths/links (`video`, `cover`, etc.)
 - Metadata sourced from CSV (`author_name`, `metrics`, etc.)
 - URLs and Integrity hashes.
 
 ### ✍️ User-Owned & Custom Fields
+
 These fields are **preserved** during sync. Manual changes win over script defaults:
+
 - `status`, `scheduled_time`, `product_link`, `tags`
 - **Any other custom field** you add (e.g., `cssclass`, `published_time`) will be kept safely in the YAML.
 
@@ -72,10 +76,10 @@ You can write notes anywhere **outside** the `sx-managed` tags. Your notes above
 The system includes a **Deletion Guard** to prevent accidental loss of manual work:
 
 - **Soft Cleanup** (`--cleanup soft`) will **automatically skip** any file that:
-    1. Has manual notes outside the managed block.
-    2. Has a non-default `status` or non-empty `tags`.
-    3. Has custom YAML fields (like `cssclass`).
+  1. Has manual notes outside the managed block.
+  2. Has a non-default `status` or non-empty `tags`.
+  3. Has custom YAML fields (like `cssclass`).
 - **To override**: Use the `--force` flag if you truly want to wipe all files, including your manual edits.
 
 > [!IMPORTANT]
-> To apply schema changes, use `./run.sh --cleanup soft --force` followed by a sync.
+> To apply schema changes, use `./scripts/run.sh --cleanup soft --force` followed by a sync.

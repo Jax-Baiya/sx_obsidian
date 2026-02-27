@@ -22,15 +22,15 @@ The CLI is the **control plane** for the entire system:
 | Export/import user data | `python -m sx_db export-userdata` or TUI userdata |
 | Index media paths | `python -m sx_db media-index` |
 | Prune missing media | `python -m sx_db prune-missing-media` |
-| Full orchestration | `./sxctl.sh` (context + actions) |
+| Full orchestration | `./scripts/sxctl.sh` (context + actions) |
 
 ### Three CLI Layers
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  sxctl.sh (40KB bash)                                    │
+│  scripts/sxctl.sh (40KB bash)                            │
 │  Context setup + profile management + action menu        │
-│  Entry: ./sxctl.sh or ./sxctl.sh menu                    │
+│  Entry: ./scripts/sxctl.sh or ./scripts/sxctl.sh menu    │
 ├──────────────────────────────────────────────────────────┤
 │  sx_db/cli.py (Typer, 1315 lines)                        │
 │  15+ commands: status, import, find, run, setup, db,     │
@@ -265,7 +265,7 @@ if not settings.SX_DB_PATH.exists():
 | Database | `sqlite3` (stdlib) | Core data store |
 | API server | `fastapi` + `uvicorn` | REST API for Obsidian plugin |
 | Search | FTS5 (SQLite) | Full-text search |
-| Shell orchestrator | `bash` (sxctl.sh) | Context management + dispatch |
+| Shell orchestrator | `bash` (`scripts/sxctl.sh`) | Context management + dispatch |
 
 ---
 
@@ -332,7 +332,7 @@ if not settings.SX_DB_PATH.exists():
 | 11 | **Path history manager** — MRU for CSV paths, vault paths, export paths | Never re-type paths |
 | 12 | **Source-scoped search** — source picker before search query | Multi-source usability |
 | 13 | **Dashboard screen** — replace "Status & Stats" with rich at-a-glance panel | Premium landing experience |
-| 14 | **Profile-aware context** — unify sxctl.sh context model into Python TUI | Single tool, no shell scripts |
+| 14 | **Profile-aware context** — unify `scripts/sxctl.sh` context model into Python TUI | Single tool, no shell scripts |
 
 ---
 
@@ -348,7 +348,7 @@ if not settings.SX_DB_PATH.exists():
 | **Session state** | Basic (path history only) | `UIState` with session memory, wizard state | sx_obsidian is *more* advanced |
 | **Reusable components** | `menu.py` monolith | Dedicated `components.py` + decorator registry | sx_obsidian is better structured |
 | **Error handling** | try/except → Rich traceback | 3-part error panels + graceful Ctrl+C | sx_obsidian is more thorough |
-| **Shell alias** | `dm` via `install_alias.sh` | `sxctl.sh` (40KB orchestrator) | Different scope |
+| **Shell alias** | `dm` via `install_alias.sh` | `scripts/sxctl.sh` (40KB orchestrator) | Different scope |
 | **Emoji usage** | Minimal, semantic only | Heavy decorative emoji | Reduce to semantic |
 
 **Key Takeaway:** sx_obsidian's TUI architecture is actually *more sophisticated* than DocuMorph's (decorator registry, stack navigation, session state, component library). The improvements needed are mostly **surface-level UX polish** — not architectural changes.

@@ -8,7 +8,7 @@ This document captures the **intended flow** and the **file-by-file implementati
 
 ```text
 ┌────────────────────────────┐
-│ ./sxctl.sh (entrypoint)    │
+│ ./scripts/sxctl.sh (entrypoint)    │
 └──────────────┬─────────────┘
                │
                ▼
@@ -76,7 +76,7 @@ SXCTL_NONINTERACTIVE=1
 
 ## File-by-file refactor map
 
-### `sxctl.sh`
+### `scripts/sxctl.sh`
 
 - Introduced **two-stage architecture**:
   - context stage (`context init/show/clear`, `ensure_context`)
@@ -94,7 +94,7 @@ SXCTL_NONINTERACTIVE=1
   - env-file load now preserves already-exported runtime selections,
   - preventing profile index drift after selection.
 
-### `Makefile`
+### `scripts/Makefile`
 
 - API/plugin targets now run through profile adapter context application.
 - Each launch path prints effective targeting context for traceability.

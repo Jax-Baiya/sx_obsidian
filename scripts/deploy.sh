@@ -1,7 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SX Obsidian DB Layer Generator - Deployment Script
 
-set -e
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
 
 echo "--- SX Generator Deployment ---"
 
@@ -57,4 +60,4 @@ if [ "$INSTALL_DEV" -eq 1 ]; then
 fi
 
 echo "--- Deployment Complete ---"
-echo "You can now use ./run.sh to execute the generator."
+echo "You can now use ./scripts/run.sh to execute the generator."

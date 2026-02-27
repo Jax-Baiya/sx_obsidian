@@ -9,17 +9,17 @@ This prevents profile drift between commands and keeps API/plugin operations ali
 
 ## Commands
 
-- `./sxctl.sh` (same as `./sxctl.sh menu`)
-- `./sxctl.sh context init` — set or replace context
-- `./sxctl.sh context show` — print saved context summary
-- `./sxctl.sh context clear` — remove saved context
-- `./sxctl.sh diagnostics` — run context, vault, DB, and API checks
-- `./sxctl.sh verify` — run a comprehensive CLI/backend smoke-test matrix
+- `./scripts/sxctl.sh` (same as `./scripts/sxctl.sh menu`)
+- `./scripts/sxctl.sh context init` — set or replace context
+- `./scripts/sxctl.sh context show` — print saved context summary
+- `./scripts/sxctl.sh context clear` — remove saved context
+- `./scripts/sxctl.sh diagnostics` — run context, vault, DB, and API checks
+- `./scripts/sxctl.sh verify` — run a comprehensive CLI/backend smoke-test matrix
 
 Legacy command families remain:
 
-- `./sxctl.sh api <serve|serve-bg|stop|server-status|init|import|status|menu>`
-- `./sxctl.sh plugin <update|build|install>`
+- `./scripts/sxctl.sh api <serve|serve-bg|stop|server-status|init|import|status|menu>`
+- `./scripts/sxctl.sh plugin <update|build|install>`
 
 ## Context model
 
@@ -99,7 +99,7 @@ Use:
 
 Example:
 
-`SXCTL_NONINTERACTIVE=1 SXCTL_PROFILE_INDEX=2 SXCTL_VAULT_ROOT=/path/to/vault SXCTL_DB_BACKEND=postgres_primary SXCTL_DB_PROFILE=SXO_LOCAL_2 ./sxctl.sh context init`
+`SXCTL_NONINTERACTIVE=1 SXCTL_PROFILE_INDEX=2 SXCTL_VAULT_ROOT=/path/to/vault SXCTL_DB_BACKEND=postgres_primary SXCTL_DB_PROFILE=SXO_LOCAL_2 ./scripts/sxctl.sh context init`
 
 ## Troubleshooting
 

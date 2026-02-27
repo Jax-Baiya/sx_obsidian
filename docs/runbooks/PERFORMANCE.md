@@ -22,14 +22,14 @@ Keep the vault lightweight by generating only what you actively work on (e.g., b
 Examples:
 
 - Sync only bookmarked items (much fewer notes):
-  - `./run.sh --mode sync --only-bookmarked`
+  - `./scripts/run.sh --mode sync --only-bookmarked`
 
 - Sync a specific set of IDs:
   - Create `ids.txt` with one id per line
-  - `./run.sh --mode sync --only-ids-file ids.txt`
+  - `./scripts/run.sh --mode sync --only-ids-file ids.txt`
 
 - After syncing an active set, archive everything else out of the vault:
-  - `./run.sh --mode sync --only-bookmarked --archive-stale`
+  - `./scripts/run.sh --mode sync --only-bookmarked --archive-stale`
 
 Archived notes are moved to `ARCHIVE_DIR` (default: `./_archive/sx_obsidian_db/` next to the project).
 

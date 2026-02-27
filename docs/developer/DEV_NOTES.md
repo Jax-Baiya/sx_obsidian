@@ -2,7 +2,7 @@
 
 ## Architecture
 
-The system consists of a Python package (`sx/`) with an entrypoint at `sx/__main__.py` (run via `python -m sx` or `./run.sh`).
+The system consists of a Python package (`sx/`) with an entrypoint at `sx/__main__.py` (run via `python -m sx` or `./scripts/run.sh`).
 
 At a high level it performs an ETL (Extract, Transform, Load) pipeline:
 
@@ -27,7 +27,7 @@ The recursive scan is depth-first. It extracts all numbers from a filename to fi
 
 ## Windows/WSL Metadata Cleanup
 
-The `deploy.sh` script automatically removes Windows `:Zone.Identifier` files which can sometimes cause permission or path processing issues in WSL. This is a standard cleanup step for cross-filesystem environments.
+The `scripts/deploy.sh` script automatically removes Windows `:Zone.Identifier` files which can sometimes cause permission or path processing issues in WSL. This is a standard cleanup step for cross-filesystem environments.
 
 ## Future Updates Itinerary (Pending)
 

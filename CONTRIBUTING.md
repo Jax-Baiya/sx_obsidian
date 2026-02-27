@@ -16,7 +16,7 @@ Use short, imperative messages. Prefer Conventional Commits:
 - Keep commits small and focused.
 - Avoid mixing formatting-only changes with logic changes.
 - Run tests before committing:
-  - `make test`
+  - `make -f scripts/Makefile test`
 - Run hooks (if installed):
   - `./.venv/bin/pre-commit run --all-files`
 

@@ -205,7 +205,7 @@ export default class SxDbPlugin extends Plugin {
       return [
         `$env:PATH='${root};${root}\\.venv\\Scripts;'+$env:PATH`,
         `$env:SXDB_ROOT='${root}'`,
-        `function global:sxdb { & '${root}\\sxctl.sh' @args }`,
+        `function global:sxdb { & '${root}\\scripts\\sxctl.sh' @args }`,
         command
       ].join('; ');
     }
@@ -215,7 +215,7 @@ export default class SxDbPlugin extends Plugin {
       return [
         `set "PATH=${root};${root}\\.venv\\Scripts;%PATH%"`,
         `set "SXDB_ROOT=${root}"`,
-        `doskey sxdb=${root}\\sxctl.sh $*`,
+        `doskey sxdb=${root}\\scripts\\sxctl.sh $*`,
         command
       ].join(' && ');
     }
@@ -224,7 +224,7 @@ export default class SxDbPlugin extends Plugin {
     return [
       `export PATH=${qRoot}/.venv/bin:${qRoot}:$PATH`,
       `export SXDB_ROOT=${qRoot}`,
-      `sxdb(){ ${qRoot}/sxctl.sh "$@"; }`,
+      `sxdb(){ ${qRoot}/scripts/sxctl.sh "$@"; }`,
       command
     ].join('; ');
   }
@@ -638,7 +638,7 @@ export default class SxDbPlugin extends Plugin {
       id: 'sxdb-copy-sxctl-serve',
       name: 'SX: Copy backend command (sxctl api serve)',
       callback: async () => {
-        const ok = await copyToClipboard('./sxctl.sh api serve');
+        const ok = await copyToClipboard('./scripts/sxctl.sh api serve');
         new Notice(ok ? 'Copied.' : 'Copy failed (clipboard permissions).');
       }
     });

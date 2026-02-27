@@ -93,21 +93,21 @@ SX Obsidian keeps your vault fast by storing the heavy dataset in the database l
 ### 1) Bootstrap
 
 ```bash
-make bootstrap
+make -f scripts/Makefile bootstrap
 cp .env.example .env
 ```
 
 ### 2) Initialize and import
 
 ```bash
-make api-init
-make api-import
+make -f scripts/Makefile api-init
+make -f scripts/Makefile api-import
 ```
 
 ### 3) Run backend
 
 ```bash
-make api-serve
+make -f scripts/Makefile api-serve
 ```
 
 Default: `http://127.0.0.1:8123`
@@ -116,14 +116,14 @@ Default: `http://127.0.0.1:8123`
 
 ```bash
 export OBSIDIAN_VAULT_PATH=/path/to/your/vault
-make plugin-build
-make plugin-install
+make -f scripts/Makefile plugin-build
+make -f scripts/Makefile plugin-install
 ```
 
 Or:
 
 ```bash
-./sxctl.sh plugin update
+./scripts/sxctl.sh plugin update
 ```
 
 ### 5) (Optional) Run web control plane
@@ -152,7 +152,7 @@ Start with: [`docs/INDEX.md`](docs/INDEX.md)
 
 - Plugin build: `cd obsidian-plugin && npm run build`
 - Focused test pass: `./.venv/bin/python -m pytest -q tests/test_sources_api.py tests/test_tui_api_control.py`
-- Full tests: `make test`
+- Full tests: `make -f scripts/Makefile test`
 
 ---
 

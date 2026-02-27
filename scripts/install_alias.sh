@@ -2,14 +2,14 @@
 # ──────────────────────────────────────────────────────────────
 # install_alias.sh — One-command alias for sx_db CLI
 #
-# Usage:  bash install_alias.sh
+# Usage:  bash scripts/install_alias.sh
 # Effect: Adds 'sxdb' alias to ~/.bash_aliases (or ~/.bashrc)
 #         so you can run: sxdb status, sxdb find "query", etc.
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
-# Resolve the project root (directory containing this script)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve the project root (parent of this script)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Managed block markers
 BLOCK_BEGIN="# >>> sx_db CLI (managed by install_alias.sh) >>>"

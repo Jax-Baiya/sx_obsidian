@@ -19,10 +19,10 @@ find . -name "*:Zone.Identifier" -delete
 
 ### 3. Permissions
 
-If `run.sh` fails with "Permission denied", ensure it is executable:
+If `scripts/run.sh` fails with "Permission denied", ensure it is executable:
 
 ```bash
-chmod +x run.sh deploy.sh
+chmod +x scripts/run.sh scripts/deploy.sh
 ```
 
 ### 3. Missing Dependencies
@@ -30,7 +30,7 @@ chmod +x run.sh deploy.sh
 If you get `ModuleNotFoundError`, run the deploy script again:
 
 ```bash
-./deploy.sh
+./scripts/deploy.sh
 ```
 
 ### 4. Broken Layout
@@ -112,9 +112,9 @@ If no profile maps to active source, the UI safely falls back to showing all pro
 If you just want the server to run in the background quickly (without systemd):
 
 ```bash
-./sxctl.sh api serve-bg
-./sxctl.sh api server-status
-./sxctl.sh api stop
+./scripts/sxctl.sh api serve-bg
+./scripts/sxctl.sh api server-status
+./scripts/sxctl.sh api stop
 ```
 
 Logs are written to a rotating diagnostic file:

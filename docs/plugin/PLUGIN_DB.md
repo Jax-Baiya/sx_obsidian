@@ -3,40 +3,48 @@
 This integration keeps Obsidian fast by **not** requiring 14k+ generated notes inside the vault.
 
 Instead:
+
 - A local SQLite database stores the full library.
 - The Obsidian plugin searches the library via a local API.
 - You “pin” only ~1k active items into the vault as Markdown notes.
 
 ## Quickstart
 
-1) Bootstrap:
-- `make bootstrap`
+1. Bootstrap:
 
-2) Initialize + import the database:
-- `make api-init`
-- `make api-import`
+- `make -f scripts/Makefile bootstrap`
+
+2. Initialize + import the database:
+
+- `make -f scripts/Makefile api-init`
+- `make -f scripts/Makefile api-import`
 
 Optional (multi-source): import into a specific source id:
+
 - `./.venv/bin/python -m sx_db import --source default`
 
 By default, `import-csv` reads these from `.env`:
+
 - `CSV_consolidated_1`
 - `CSV_authors_1`
 - `CSV_bookmarks_1`
 
-3) Run the API:
-- `make api-serve`
+3. Run the API:
 
-4) Build + install the plugin into your vault:
-- `make plugin-build`
+- `make -f scripts/Makefile api-serve`
+
+4. Build + install the plugin into your vault:
+
+- `make -f scripts/Makefile plugin-build`
 - `export OBSIDIAN_VAULT_PATH=/mnt/t/AlexNova`
-- `make plugin-install`
+- `make -f scripts/Makefile plugin-install`
 
 Or use the helper launcher (wraps the same Make targets):
 
-- `./sxctl.sh plugin update`
+- `./scripts/sxctl.sh plugin update`
 
 Enable the plugin in Obsidian:
+
 - Settings → Community plugins → Enable “SX Obsidian DB”
 
 ## Using the plugin

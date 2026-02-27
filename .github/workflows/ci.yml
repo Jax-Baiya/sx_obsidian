@@ -16,8 +16,8 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          cache: 'pip'
+          python-version: "3.10"
+          cache: "pip"
 
       - name: Install shell test tooling
         run: |
@@ -26,15 +26,15 @@ jobs:
 
       - name: Make scripts executable
         run: |
-          chmod +x deploy.sh run.sh sxctl.sh
+          chmod +x scripts/deploy.sh scripts/run.sh scripts/sxctl.sh
 
       - name: Shell lint
         run: |
-          shellcheck sxctl.sh scripts/profile_adapter.sh scripts/install_plugin.sh scripts/build_plugin.sh deploy.sh run.sh
+          shellcheck scripts/sxctl.sh scripts/profile_adapter.sh scripts/install_plugin.sh scripts/build_plugin.sh scripts/deploy.sh scripts/run.sh
 
       - name: Shell format check
         run: |
-          shfmt -d sxctl.sh scripts/profile_adapter.sh scripts/install_plugin.sh scripts/build_plugin.sh deploy.sh run.sh
+          shfmt -i 2 -ci -bn -d scripts/sxctl.sh scripts/profile_adapter.sh scripts/install_plugin.sh scripts/build_plugin.sh scripts/deploy.sh scripts/run.sh
 
       - name: Run bats tests
         run: |
@@ -42,7 +42,7 @@ jobs:
 
       - name: Deploy (with dev deps)
         run: |
-          ./deploy.sh --dev
+          ./scripts/deploy.sh --dev
 
       - name: Run tests
         run: |

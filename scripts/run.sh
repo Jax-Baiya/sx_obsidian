@@ -1,5 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SX Obsidian DB Layer Generator - Runner Script
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
 
 VENV_DIR=".venv"
 
@@ -20,11 +25,11 @@ print_venv_diagnostics() {
         echo "(missing) $VENV_DIR" >&2
     fi
 
-    printf '\n%s\n' "Fix: rm -rf $VENV_DIR && ./deploy.sh" >&2
+    printf '\n%s\n' "Fix: rm -rf $VENV_DIR && ./scripts/deploy.sh" >&2
 }
 
 if [ ! -d "$VENV_DIR" ]; then
-    echo "Error: Virtual environment not found. Please run ./deploy.sh first."
+    echo "Error: Virtual environment not found. Please run ./scripts/deploy.sh first."
     exit 1
 fi
 

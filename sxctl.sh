@@ -44,26 +44,13 @@ if [ -t 1 ] || [ -t 2 ]; then
   C_YEL='\033[33m'
   C_RED='\033[31m'
   C_WHT='\033[97m'
-  C_BLU='\033[34m'
 else
   C_RST='' C_BOLD='' C_ITAL='' C_DIM='' C_CYAN='' C_MAG=''
-  C_GRN='' C_YEL='' C_RED='' C_WHT='' C_BLU=''
+  C_GRN='' C_YEL='' C_RED='' C_WHT=''
 fi
 
 UI_HR='='
-UI_BOX_TL='+'
-UI_BOX_TR='+'
-UI_BOX_BL='+'
-UI_BOX_BR='+'
 UI_BOX_V='|'
-I_API='API'
-I_DB='DB'
-I_IMPORT='CSV'
-I_BUILD='BUILD'
-I_INSTALL='INSTALL'
-I_CTX='CTX'
-I_DIAG='DIAG'
-I_QUIT='QUIT'
 
 say()   { printf "%b\n" "$*"; }
 warn()  { printf "%b\n" "${C_YEL}! $*${C_RST}" >&2; }

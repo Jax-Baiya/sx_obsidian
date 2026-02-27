@@ -10,17 +10,17 @@ print_venv_diagnostics() {
 
     if [ -d "$VENV_DIR" ]; then
         echo "Contents: $VENV_DIR/bin" >&2
-        ls -la "$VENV_DIR/bin" 2>/dev/null | sed -n '1,120p' >&2 || true
+        find "$VENV_DIR/bin" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sed -n '1,120p' >&2 || true
 
         if [ -f "$VENV_DIR/pyvenv.cfg" ]; then
-            echo "\n$VENV_DIR/pyvenv.cfg:" >&2
+            printf '\n%s\n' "$VENV_DIR/pyvenv.cfg:" >&2
             sed -n '1,120p' "$VENV_DIR/pyvenv.cfg" >&2 || true
         fi
     else
         echo "(missing) $VENV_DIR" >&2
     fi
 
-    echo "\nFix: rm -rf $VENV_DIR && ./deploy.sh" >&2
+    printf '\n%s\n' "Fix: rm -rf $VENV_DIR && ./deploy.sh" >&2
 }
 
 if [ ! -d "$VENV_DIR" ]; then

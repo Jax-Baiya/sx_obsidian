@@ -11,7 +11,7 @@ from sx.paths import PathResolver
 
 MANAGED_START = "<!-- sx-managed:start -->"
 MANAGED_END = "<!-- sx-managed:end -->"
-TEMPLATE_VERSION = "v1.1"
+TEMPLATE_VERSION = "v1.3"
 
 
 WORKFLOW_STATUSES = [
@@ -121,6 +121,17 @@ def _one_line(text: str) -> str:
     return " ".join((text or "").split()).strip()
 
 
+def _embed_target(relative_path: str | None, fallback_name: str, *, resolver: PathResolver) -> str:
+    rel = str(relative_path or "").strip().replace("\\", "/").lstrip("/")
+    group = str((resolver.config or {}).get("group_link_prefix") or "").strip().strip("/")
+
+    if group and rel:
+        return f"group:{group}/{rel}"
+    if rel:
+        return rel
+    return fallback_name
+
+
 def render_note(video: dict, *, resolver: PathResolver) -> str:
     """Render a single markdown note for an item.
 
@@ -160,6 +171,14 @@ def render_note(video: dict, *, resolver: PathResolver) -> str:
 
     cover_name = Path(str(cover_path or "")).name if cover_path else ""
     video_name = Path(str(video_path or "")).name if video_path else ""
+    cover_embed_target = _embed_target(cover_path, cover_name or (asset_id + ".jpg"), resolver=resolver)
+    video_embed_target = _embed_target(video_path, video_name or (asset_id + ".mp4"), resolver=resolver)
+
+    # When PathLinker group prefix is active, the *_path and files_seen
+    # frontmatter fields should also carry the group: prefix so that all
+    # references are consistent and PathLinker can resolve them.
+    video_path_fm = _embed_target(video_path, "", resolver=resolver) or video_path
+    cover_path_fm = _embed_target(cover_path, "", resolver=resolver) or cover_path
 
     # Workflow defaults (multi-choice supported)
     statuses_list = _statuses_to_list(video.get("statuses"))
@@ -195,7 +214,9 @@ def render_note(video: dict, *, resolver: PathResolver) -> str:
                     return
             except Exception:
                 return
-        files_seen_set.add(s)
+        # Store with group prefix when active, so files_seen matches other paths.
+        prefixed = _embed_target(s, "", resolver=resolver) or s
+        files_seen_set.add(prefixed)
 
     if isinstance(raw_files_seen, list):
         for p in raw_files_seen:
@@ -232,13 +253,15 @@ def render_note(video: dict, *, resolver: PathResolver) -> str:
     fm = {
         "fields": "sx_media",
         "id": asset_id,
-        "video": f"[[{video_path}]]" if video_path else None,
-        "video_path": video_path,
+        "video": f"[[{video_embed_target}]]" if video_embed_target else None,
+        "video_embed": f"[[{video_embed_target}]]" if video_embed_target else None,
+        "video_path": video_path_fm,
         "video_abs": video_abs,
         "sxopen_video": v_open,
         "sxreveal_video": v_reveal,
-        "cover": f"[[{cover_path}]]" if cover_path else None,
-        "cover_path": cover_path,
+        "cover": f"[[{cover_embed_target}]]" if cover_embed_target else None,
+        "cover_embed": f"[[{cover_embed_target}]]" if cover_embed_target else None,
+        "cover_path": cover_path_fm,
         "cover_abs": cover_abs,
         "sxopen_cover": c_open,
         "sxreveal_cover": c_reveal,
@@ -306,10 +329,10 @@ def render_note(video: dict, *, resolver: PathResolver) -> str:
         ">>>[!blank-container|min-0]",
         ">>>>[!multi-column]",
         ">>>>>[!Desc]+ Cover",
-        f">>>>>> ![[{cover_name or (asset_id + '.jpg')}]]",
+        f">>>>>> ![[{cover_embed_target}]]",
         ">>>>",
         ">>>>>[!Desc]+ Video",
-        f">>>>>> ![[{video_name or (asset_id + '.mp4')}]]",
+        f">>>>>> ![[{video_embed_target}]]",
         ">>>>",
         ">>",
         ">>>[!blank-container|min-0]",

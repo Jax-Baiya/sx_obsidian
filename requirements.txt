@@ -1,12 +1,17 @@
 pandas
 pyyaml
 tqdm
-python-dotenv
 
 # sx_db (SQLite API + CLI)
-fastapi
-uvicorn
-pydantic
-pydantic-settings
-typer
-rich
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+psycopg2-binary>=2.9.0
+rich>=13.0.0
+typer>=0.9.0
+questionary>=2.0.0
+# Optional runtime bridge for SX_DB_BACKEND_MODE=POSTGRES_MIRROR
+psycopg[binary]boto3>=1.28.0
+boto3-stubs[s3]

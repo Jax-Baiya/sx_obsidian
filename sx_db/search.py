@@ -3,13 +3,20 @@ from __future__ import annotations
 import sqlite3
 
 
-def search(conn: sqlite3.Connection, q: str, *, limit: int = 50, offset: int = 0) -> list[dict]:
+def search(
+    conn: sqlite3.Connection,
+    q: str,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    source_id: str = "default",
+) -> list[dict]:
     q = (q or "").strip()
     if not q:
         rows = conn.execute(
             "SELECT id, author_unique_id, author_name, substr(caption, 1, 160) AS snippet, bookmarked "
-            "FROM videos ORDER BY bookmarked DESC, updated_at DESC LIMIT ? OFFSET ?",
-            (limit, offset),
+            "FROM videos WHERE source_id=? ORDER BY bookmarked DESC, updated_at DESC LIMIT ? OFFSET ?",
+            (source_id, limit, offset),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -27,12 +34,12 @@ def search(conn: sqlite3.Connection, q: str, *, limit: int = 50, offset: int = 0
                        v.bookmarked,
                        bm25(videos_fts) AS score
                 FROM videos_fts
-                JOIN videos v ON v.id = videos_fts.id
-                WHERE videos_fts MATCH ?
+                JOIN videos v ON v.id = videos_fts.id AND v.source_id = videos_fts.source_id
+                WHERE videos_fts MATCH ? AND v.source_id=?
                 ORDER BY score
                 LIMIT ? OFFSET ?
                 """,
-                (q, limit, offset),
+                (q, source_id, limit, offset),
             ).fetchall()
             if rows:
                 return [dict(r) for r in rows]
@@ -46,10 +53,10 @@ def search(conn: sqlite3.Connection, q: str, *, limit: int = 50, offset: int = 0
         """
         SELECT id, author_unique_id, author_name, substr(caption, 1, 160) AS snippet, bookmarked
         FROM videos
-        WHERE caption LIKE ? OR author_unique_id LIKE ? OR author_name LIKE ? OR id LIKE ?
+        WHERE source_id=? AND (caption LIKE ? OR author_unique_id LIKE ? OR author_name LIKE ? OR id LIKE ?)
         ORDER BY bookmarked DESC, updated_at DESC
         LIMIT ? OFFSET ?
         """,
-        (like, like, like, like, limit, offset),
+        (source_id, like, like, like, like, limit, offset),
     ).fetchall()
     return [dict(r) for r in rows]

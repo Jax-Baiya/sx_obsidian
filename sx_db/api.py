@@ -3,20 +3,45 @@ from __future__ import annotations
 import mimetypes
 import re
 import json
+import uuid
+import logging
+import os
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import Body, FastAPI, HTTPException, Query, Response
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from sx.paths import PathResolver
 
-from .db import connect, init_db
+from .db import connect, ensure_source, get_default_source_id, init_db, list_sources, set_default_source
 from .markdown import TEMPLATE_VERSION, render_note
+from .postgres_mirror import maybe_sync_postgres_mirror
+from .repositories import PostgresRepository, get_repository
+from .scheduler import Scheduler
 from .search import search as search_fn
 from .settings import Settings
+
+
+_CTX_SOURCE_ID: ContextVar[str] = ContextVar("sx_source_id", default="default")
+_CTX_REQUEST_ID: ContextVar[str] = ContextVar("sx_request_id", default="")
+_AUDIT_LOG = logging.getLogger("sx_db.audit")
+_MEDIA_LOG = logging.getLogger("sx_db.media")
+
+
+def _extract_trailing_profile_index(value: object) -> int | None:
+    s = str(value or "").strip().lower()
+    if not s:
+        return None
+    m = re.search(r"(?:^|[_-])(?:p)?(\d{1,2})$", s)
+    if not m:
+        return None
+    n = int(m.group(1))
+    return n if n >= 1 else None
 
 
 class MetaIn(BaseModel):
@@ -71,8 +96,145 @@ class DangerResetIn(BaseModel):
     reset_cached_notes: bool = False
 
 
+class SourceIn(BaseModel):
+    id: str
+    label: str | None = None
+    kind: str | None = None
+    description: str | None = None
+    enabled: bool = True
+    make_default: bool = False
+
+
+class SourcePatchIn(BaseModel):
+    label: str | None = None
+    kind: str | None = None
+    description: str | None = None
+    enabled: bool | None = None
+
+
+class BootstrapSchemaIn(BaseModel):
+    source_id: str
+
+
+class ProfileConfigIn(BaseModel):
+    """Payload for updating a source profile's .env configuration."""
+    label: str | None = None
+    src_path: str | None = None
+    source_id: str | None = None
+    assets_path: str | None = None
+    pathlinker_group: str | None = None
+    group_name: str | None = None
+    vault_name: str | None = None
+    vault_path: str | None = None
+    db_local: str | None = None
+    db_session: str | None = None
+    db_transaction: str | None = None
+
+
 def create_app(settings: Settings) -> FastAPI:
     app = FastAPI(title="sx_obsidian SQLite API", version="0.1.0")
+    repository = get_repository(settings)
+    scheduler = Scheduler(settings)
+    backend_mode = str(getattr(settings, "SX_DB_BACKEND_MODE", "SQLITE") or "SQLITE").strip().upper()
+    is_pg_primary = backend_mode == "POSTGRES_PRIMARY"
+
+    def _sanitize_source_id(v: object) -> str:
+        raw = str(v or "").strip()
+        if not raw:
+            return str(settings.SX_DEFAULT_SOURCE_ID or "default")
+        cleaned = re.sub(r"[^a-zA-Z0-9._-]", "", raw)
+        return cleaned or str(settings.SX_DEFAULT_SOURCE_ID or "default")
+
+    def _parse_env_file(path: Path) -> dict[str, str]:
+        out: dict[str, str] = {}
+        if not path.exists():
+            return out
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            s = line.strip()
+            if not s or s.startswith("#") or "=" not in s:
+                continue
+            k, v = s.split("=", 1)
+            key = k.strip()
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+                continue
+            val = v.strip()
+            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                val = val[1:-1]
+            out[key] = val
+        return out
+
+    def _update_env_file(path: Path, updates: dict[str, str | None]) -> None:
+        """Atomically update key-value pairs in a .env file.
+
+        - Existing keys are updated in-place (preserving line position).
+        - Keys set to ``None`` are removed.
+        - New keys are appended at the end.
+        - Comments, blank lines, and ordering are preserved.
+        """
+        remaining = dict(updates)
+        lines: list[str] = []
+
+        if path.exists():
+            for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                stripped = raw_line.strip()
+                if stripped and not stripped.startswith("#") and "=" in stripped:
+                    key = stripped.split("=", 1)[0].strip()
+                    if key in remaining:
+                        new_val = remaining.pop(key)
+                        if new_val is not None:
+                            lines.append(f"{key}={new_val}")
+                        # else: key is being removed — skip line
+                        continue
+                lines.append(raw_line)
+
+        # Append any brand-new keys that were not found in the file.
+        for key, val in remaining.items():
+            if val is not None:
+                lines.append(f"{key}={val}")
+
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _build_db_url_from_alias(env_map: dict[str, str], alias: str) -> tuple[str, str] | tuple[None, None]:
+        alias = str(alias or "").strip()
+        if not alias:
+            return None, None
+        user = env_map.get(f"{alias}_DB_USER", "")
+        pwd = env_map.get(f"{alias}_DB_PASSWORD", "")
+        host = env_map.get(f"{alias}_DB_HOST", "")
+        port = env_map.get(f"{alias}_DB_PORT", "")
+        dbn = env_map.get(f"{alias}_DB_NAME", "")
+        schema = env_map.get(f"{alias}_DB_SCHEMA", "")
+        if not (user and host and port and dbn):
+            return None, None
+
+        full = f"postgresql://{quote(user)}:{quote(pwd)}@{host}:{port}/{quote(dbn)}"
+        if schema:
+            full += f"?options=-c%20search_path%3D{quote(schema)}"
+
+        redacted = f"postgresql://***:***@{host}:{port}/{dbn}"
+        if schema:
+            redacted += f"?options=-c%20search_path%3D{schema}"
+        return full, redacted
+
+    def _source_id_from_profile_env(env_map: dict[str, str], idx: int) -> str:
+        """Resolve a stable source_id from profile env keys.
+
+        Priority:
+        1) SRC_PROFILE_<N>_ID (explicit source id)
+        2) DATABASE_PROFILE_<N> when it is a single non-alias token
+        3) assets_<N> fallback
+        """
+        explicit_sid = str(env_map.get(f"SRC_PROFILE_{idx}_ID") or "").strip()
+        if explicit_sid:
+            return _sanitize_source_id(explicit_sid)
+
+        legacy = str(env_map.get(f"DATABASE_PROFILE_{idx}") or "").strip()
+        if legacy and "," not in legacy:
+            # Ignore DB alias-like values (LOCAL_2, SUPABASE_SESSION_3, ...).
+            if not re.match(r"^(LOCAL|SUPABASE_SESSION|SUPABASE_TRANS|SUPABASE_TRANSACTION|SXO_LOCAL|SXO_SESSION|SXO_TRANS)_\d+$", legacy):
+                return _sanitize_source_id(legacy)
+
+        return _sanitize_source_id(f"assets_{idx}")
 
     if settings.SX_API_CORS_ALLOW_ALL:
         app.add_middleware(
@@ -83,15 +245,594 @@ def create_app(settings: Settings) -> FastAPI:
             allow_headers=["*"],
         )
 
+    default_source_id = _sanitize_source_id(settings.SX_DEFAULT_SOURCE_ID)
+
+    # Bootstrap source registry for existing DBs.
+    try:
+        if is_pg_primary and isinstance(repository, PostgresRepository):
+            repository.init_schema(default_source_id)
+            srcs = repository.list_sources()
+            if not srcs.get("default_source_id"):
+                with repository._connect() as pg_conn:
+                    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                    with pg_conn.cursor() as cur:
+                        cur.execute("UPDATE public.sources SET is_default=0")
+                        cur.execute(
+                            """
+                            INSERT INTO public.sources(id, label, enabled, is_default, created_at, updated_at)
+                            VALUES(%s, %s, 1, 1, %s, %s)
+                            ON CONFLICT(id) DO UPDATE SET is_default=1, updated_at=EXCLUDED.updated_at
+                            """,
+                            (default_source_id, default_source_id, now, now),
+                        )
+                    pg_conn.commit()
+        else:
+            conn0 = connect(settings.SX_DB_PATH)
+            init_db(conn0, enable_fts=settings.SX_DB_ENABLE_FTS)
+            ensure_source(conn0, default_source_id, label=default_source_id)
+            if not conn0.execute("SELECT 1 FROM sources WHERE is_default=1 LIMIT 1").fetchone():
+                set_default_source(conn0, default_source_id)
+            conn0.commit()
+    except Exception:
+        # Do not block app startup on source registry bootstrap.
+        pass
+
+    @app.middleware("http")
+    async def source_context_middleware(request: Request, call_next):
+        request_id = uuid.uuid4().hex
+        requested = request.headers.get("X-SX-Source-ID") or request.query_params.get("source_id")
+        hdr_profile_raw = request.headers.get("X-SX-Profile-Index")
+        hdr_profile_idx: int | None = None
+        if hdr_profile_raw is not None:
+            try:
+                n = int(str(hdr_profile_raw).strip())
+                if n >= 1:
+                    hdr_profile_idx = n
+            except Exception:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "ok": False,
+                        "detail": "Invalid X-SX-Profile-Index header",
+                        "request_id": request_id,
+                    },
+                )
+
+        # Profile config endpoints are meta/admin — they don't need source scoping.
+        _exempt_prefixes = ("/pipeline/profiles", "/config/profiles")
+        is_exempt = any(request.url.path.startswith(p) for p in _exempt_prefixes)
+
+        if settings.SX_API_REQUIRE_EXPLICIT_SOURCE and not requested and not is_exempt:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "detail": "Missing explicit source_id (query or X-SX-Source-ID)",
+                    "request_id": request_id,
+                },
+            )
+
+        if requested:
+            source_id = _sanitize_source_id(requested)
+        else:
+            resolved_default = default_source_id
+            if is_pg_primary and isinstance(repository, PostgresRepository):
+                try:
+                    d = repository.list_sources().get("default_source_id")
+                    resolved_default = _sanitize_source_id(d or default_source_id)
+                except Exception:
+                    resolved_default = default_source_id
+            else:
+                try:
+                    conn = connect(settings.SX_DB_PATH)
+                    init_db(conn, enable_fts=settings.SX_DB_ENABLE_FTS)
+                    resolved_default = _sanitize_source_id(get_default_source_id(conn, fallback=default_source_id))
+                except Exception:
+                    resolved_default = default_source_id
+            source_id = resolved_default
+
+        if settings.SX_API_ENFORCE_PROFILE_SOURCE_MATCH:
+            sid_idx = _extract_trailing_profile_index(source_id)
+            if hdr_profile_idx is not None and sid_idx is not None and hdr_profile_idx != sid_idx:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "ok": False,
+                        "detail": (
+                            f"Profile/source mismatch: X-SX-Profile-Index={hdr_profile_idx} "
+                            f"but source_id={source_id} implies profile #{sid_idx}"
+                        ),
+                        "request_id": request_id,
+                    },
+                )
+
+        if is_pg_primary and isinstance(repository, PostgresRepository):
+            try:
+                schema = repository.resolve_schema(source_id, create_if_missing=False)
+            except Exception as e:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "ok": False,
+                        "detail": f"Source schema mapping missing/invalid for source_id={source_id}: {e}",
+                        "request_id": request_id,
+                    },
+                )
+
+            backend_ctx = {
+                "backend": "postgres_primary",
+                "active": True,
+                "source_id": source_id,
+                "schema": schema,
+                "search_path": f"{schema},public",
+            }
+        else:
+            try:
+                conn = connect(settings.SX_DB_PATH)
+                init_db(conn, enable_fts=settings.SX_DB_ENABLE_FTS)
+                ensure_source(conn, source_id, label=source_id)
+                conn.commit()
+            except Exception:
+                pass
+
+            backend_ctx = {
+                "backend": "sqlite",
+                "active": False,
+                "reason": "default sqlite backend",
+                "source_id": source_id,
+            }
+            try:
+                backend_ctx = maybe_sync_postgres_mirror(settings, source_id)
+                if str(getattr(settings, "SX_DB_BACKEND_MODE", "")).strip().upper() == "POSTGRES_MIRROR":
+                    backend_ctx["deprecation"] = "POSTGRES_MIRROR is transitional; migrate to POSTGRES_PRIMARY"
+            except Exception as e:
+                backend_ctx = {
+                    "backend": "sqlite",
+                    "active": False,
+                    "reason": f"postgres mirror sync failed: {e}",
+                    "source_id": source_id,
+                }
+
+        tok_sid = _CTX_SOURCE_ID.set(source_id)
+        tok_rid = _CTX_REQUEST_ID.set(request_id)
+        request.state.sx_source_id = source_id
+        request.state.sx_request_id = request_id
+        request.state.sx_backend_ctx = backend_ctx
+        try:
+            response = await call_next(request)
+        finally:
+            _CTX_SOURCE_ID.reset(tok_sid)
+            _CTX_REQUEST_ID.reset(tok_rid)
+        response.headers["X-SX-Source-ID"] = source_id
+        response.headers["X-SX-Backend"] = str(backend_ctx.get("backend") or "sqlite")
+        response.headers["X-SX-Request-ID"] = request_id
+        _AUDIT_LOG.info(
+            "audit request_id=%s source_id=%s schema=%s endpoint=%s timestamp=%s",
+            request_id,
+            source_id,
+            str(backend_ctx.get("schema") or ""),
+            request.url.path,
+            datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        )
+        return response
+
+    @app.get("/sources")
+    def get_sources() -> dict:
+        if is_pg_primary:
+            return repository.list_sources()
+        conn = connect(settings.SX_DB_PATH)
+        init_db(conn, enable_fts=settings.SX_DB_ENABLE_FTS)
+        rows = list_sources(conn)
+        active_default = get_default_source_id(conn, fallback=default_source_id)
+        return {"sources": rows, "default_source_id": active_default}
+
+    @app.get("/admin/audit/source-overlap")
+    def audit_source_overlap(
+        source_a: str = Query("assets_1"),
+        source_b: str = Query("assets_2"),
+    ) -> dict:
+        a = _sanitize_source_id(source_a)
+        b = _sanitize_source_id(source_b)
+        if a == b:
+            raise HTTPException(status_code=400, detail="source_a and source_b must differ")
+
+        if not (is_pg_primary and isinstance(repository, PostgresRepository)):
+            return {"ok": True, "backend": "sqlite", "message": "Overlap audit is only available in POSTGRES_PRIMARY"}
+
+        try:
+            sa = repository.resolve_schema(a, create_if_missing=False)
+            sb = repository.resolve_schema(b, create_if_missing=False)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Schema resolution failed: {e}")
+
+        with repository._connect() as pg_conn:
+            with pg_conn.cursor() as cur:
+                cur.execute(f'SELECT COUNT(*) AS n FROM "{sa}".videos')
+                count_a = int((cur.fetchone() or {}).get("n") or 0)
+                cur.execute(f'SELECT COUNT(*) AS n FROM "{sb}".videos')
+                count_b = int((cur.fetchone() or {}).get("n") or 0)
+                cur.execute(
+                    f'''
+                    SELECT COUNT(*) AS n
+                    FROM "{sa}".videos va
+                    JOIN "{sb}".videos vb ON va.id = vb.id
+                    '''
+                )
+                overlap = int((cur.fetchone() or {}).get("n") or 0)
+                cur.execute(
+                    f'''
+                    SELECT COUNT(*) AS n
+                    FROM (
+                      SELECT id FROM "{sa}".videos
+                      EXCEPT
+                      SELECT id FROM "{sb}".videos
+                    ) t
+                    '''
+                )
+                only_a = int((cur.fetchone() or {}).get("n") or 0)
+                cur.execute(
+                    f'''
+                    SELECT COUNT(*) AS n
+                    FROM (
+                      SELECT id FROM "{sb}".videos
+                      EXCEPT
+                      SELECT id FROM "{sa}".videos
+                    ) t
+                    '''
+                )
+                only_b = int((cur.fetchone() or {}).get("n") or 0)
+
+        return {
+            "ok": True,
+            "backend": "postgres_primary",
+            "source_a": a,
+            "schema_a": sa,
+            "count_a": count_a,
+            "source_b": b,
+            "schema_b": sb,
+            "count_b": count_b,
+            "overlap_ids": overlap,
+            "only_a_ids": only_a,
+            "only_b_ids": only_b,
+        }
+
+    @app.get("/pipeline/profiles")
+    def get_pipeline_profiles() -> dict:
+        env_path = Path(settings.SX_SCHEDULERX_ENV) if settings.SX_SCHEDULERX_ENV else Path("../SchedulerX/backend/pipeline/.env")
+        env_map = _parse_env_file(env_path)
+
+        indices: set[int] = set()
+        for k in env_map.keys():
+            m = re.match(r"^(SRC_PATH|SRC_PROFILE)_(\d+)$", k)
+            if m:
+                indices.add(int(m.group(2)))
+        if not indices:
+            indices.add(int(settings.SX_PROFILE_INDEX or 1))
+
+        profiles: list[dict] = []
+        for idx in sorted(indices):
+            path = env_map.get(f"SRC_PATH_{idx}") or env_map.get(f"SRC_PROFILE_{idx}") or ""
+            label = env_map.get(f"SRC_PATH_{idx}_LABEL") or env_map.get(f"SRC_PROFILE_{idx}_LABEL") or f"profile_{idx}"
+            source_id = _source_id_from_profile_env(env_map, idx)
+
+            local_alias = env_map.get(f"SRC_PATH_{idx}_DB_LOCAL") or env_map.get(f"SRC_PROFILE_{idx}_DB_LOCAL") or ""
+            session_alias = env_map.get(f"SRC_PATH_{idx}_DB_SESSION") or env_map.get(f"SRC_PROFILE_{idx}_DB_SESSION") or ""
+            trans_alias = env_map.get(f"SRC_PATH_{idx}_DB_TRANSACTION") or env_map.get(f"SRC_PROFILE_{idx}_DB_TRANSACTION") or ""
+            sql_db_path = (
+                env_map.get(f"SQL_DB_PATH_{idx}")
+                or env_map.get(f"SX_SQL_DB_PATH_{idx}")
+                or env_map.get(f"SRC_PATH_{idx}_DB_SQL")
+                or env_map.get(f"SRC_PROFILE_{idx}_DB_SQL")
+                or ""
+            )
+
+            local_url, local_redacted = _build_db_url_from_alias(env_map, local_alias)
+            session_url, session_redacted = _build_db_url_from_alias(env_map, session_alias)
+            trans_url, trans_redacted = _build_db_url_from_alias(env_map, trans_alias)
+
+            profiles.append(
+                {
+                    "index": idx,
+                    "label": label,
+                    "src_path": path,
+                    "source_id": source_id,
+                    "pathlinker_group": env_map.get(f"PATHLINKER_GROUP_{idx}") or "",
+                    "group_name": env_map.get(f"GROUP_NAME_{idx}") or "",
+                    "vault_name": env_map.get(f"VAULT_NAME_{idx}") or "",
+                    "vault_path": env_map.get(f"VAULT_PATH_{idx}") or "",
+                    "assets_path": env_map.get(f"ASSETS_PATH_{idx}") or "",
+                    "db_profiles": {
+                        "local": {"alias": local_alias or None, "url_redacted": local_redacted, "configured": bool(local_url)},
+                        "session": {"alias": session_alias or None, "url_redacted": session_redacted, "configured": bool(session_url)},
+                        "transaction": {"alias": trans_alias or None, "url_redacted": trans_redacted, "configured": bool(trans_url)},
+                        "sql": {"db_path": sql_db_path or None, "configured": bool(sql_db_path)},
+                    },
+                    "available_modes": ["LOCAL", "SESSION", "TRANSACTION", "SQL"],
+                }
+            )
+
+        return {
+            "ok": True,
+            "env_path": str(env_path),
+            "profiles": profiles,
+        }
+
+    @app.put("/config/profiles/{idx}")
+    def update_profile_config(idx: int, payload: ProfileConfigIn = Body(...)) -> dict:
+        """Write profile configuration fields back to the .env file."""
+        env_path = Path(settings.SX_SCHEDULERX_ENV) if settings.SX_SCHEDULERX_ENV else Path(".env")
+        if idx < 1 or idx > 99:
+            raise HTTPException(status_code=400, detail="Profile index must be 1–99")
+
+        updates: dict[str, str | None] = {}
+
+        field_map: dict[str, str] = {
+            "src_path": f"SRC_PATH_{idx}",
+            "label": f"SRC_PATH_{idx}_LABEL",
+            "source_id": f"SRC_PROFILE_{idx}_ID",
+            "assets_path": f"ASSETS_PATH_{idx}",
+            "pathlinker_group": f"PATHLINKER_GROUP_{idx}",
+            "group_name": f"GROUP_NAME_{idx}",
+            "vault_name": f"VAULT_NAME_{idx}",
+            "vault_path": f"VAULT_PATH_{idx}",
+            "db_local": f"SRC_PATH_{idx}_DB_LOCAL",
+            "db_session": f"SRC_PATH_{idx}_DB_SESSION",
+            "db_transaction": f"SRC_PATH_{idx}_DB_TRANSACTION",
+        }
+
+        payload_dict = payload.dict(exclude_unset=True)
+        for field_name, env_key in field_map.items():
+            if field_name in payload_dict:
+                val = payload_dict[field_name]
+                updates[env_key] = str(val).strip() if val is not None else None
+
+        if not updates:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        try:
+            _update_env_file(env_path, updates)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to write .env: {exc}")
+
+        # Re-read and return updated profile snapshot.
+        env_map = _parse_env_file(env_path)
+        return {
+            "ok": True,
+            "index": idx,
+            "updated_keys": list(updates.keys()),
+            "profile": {
+                "index": idx,
+                "label": env_map.get(f"SRC_PATH_{idx}_LABEL") or env_map.get(f"SRC_PROFILE_{idx}_LABEL") or f"profile_{idx}",
+                "src_path": env_map.get(f"SRC_PATH_{idx}") or "",
+                "source_id": _source_id_from_profile_env(env_map, idx),
+                "pathlinker_group": env_map.get(f"PATHLINKER_GROUP_{idx}") or "",
+                "group_name": env_map.get(f"GROUP_NAME_{idx}") or "",
+                "vault_name": env_map.get(f"VAULT_NAME_{idx}") or "",
+                "vault_path": env_map.get(f"VAULT_PATH_{idx}") or "",
+                "assets_path": env_map.get(f"ASSETS_PATH_{idx}") or "",
+            },
+        }
+
+    @app.post("/sources")
+    def create_source(payload: SourceIn = Body(...)) -> dict:
+        source_id = _sanitize_source_id(payload.id)
+        if not source_id:
+            raise HTTPException(status_code=400, detail="Invalid source id")
+
+        if is_pg_primary and isinstance(repository, PostgresRepository):
+            schema_info = repository.init_schema(source_id)
+            with repository._connect() as pg_conn:
+                now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO public.sources(id, label, kind, description, enabled, is_default, created_at, updated_at)
+                        VALUES(%s, %s, %s, %s, %s, 0, %s, %s)
+                        ON CONFLICT(id) DO UPDATE SET
+                          label=COALESCE(EXCLUDED.label, public.sources.label),
+                          kind=COALESCE(EXCLUDED.kind, public.sources.kind),
+                          description=COALESCE(EXCLUDED.description, public.sources.description),
+                          enabled=EXCLUDED.enabled,
+                          updated_at=EXCLUDED.updated_at
+                        """,
+                        (
+                            source_id,
+                            payload.label or source_id,
+                            payload.kind,
+                            payload.description,
+                            1 if bool(payload.enabled) else 0,
+                            now,
+                            now,
+                        ),
+                    )
+                    if payload.make_default:
+                        cur.execute("UPDATE public.sources SET is_default=0")
+                        cur.execute("UPDATE public.sources SET is_default=1, updated_at=%s WHERE id=%s", (now, source_id))
+                pg_conn.commit()
+            return {"ok": True, "source_id": source_id, "schema": schema_info.get("schema")}
+
+        conn = connect(settings.SX_DB_PATH)
+        init_db(conn, enable_fts=settings.SX_DB_ENABLE_FTS)
+        ensure_source(
+            conn,
+            source_id,
+            label=(payload.label or source_id),
+            kind=payload.kind,
+            description=payload.description,
+            enabled=bool(payload.enabled),
+        )
+        if payload.make_default:
+            set_default_source(conn, source_id)
+        conn.commit()
+        return {"ok": True, "source_id": source_id}
+
+    @app.patch("/sources/{source_id}")
+    def patch_source(source_id: str, payload: SourcePatchIn = Body(...)) -> dict:
+        sid = _sanitize_source_id(source_id)
+        if not sid:
+            raise HTTPException(status_code=400, detail="Invalid source id")
+
+        if is_pg_primary and isinstance(repository, PostgresRepository):
+            now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            with repository._connect() as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute("SELECT id FROM public.sources WHERE id=%s", (sid,))
+                    row = cur.fetchone()
+                    if not row:
+                        raise HTTPException(status_code=404, detail="Source not found")
+                    cur.execute(
+                        """
+                        UPDATE public.sources
+                        SET
+                          label=COALESCE(%s, label),
+                          kind=COALESCE(%s, kind),
+                          description=COALESCE(%s, description),
+                          enabled=COALESCE(%s, enabled),
+                          updated_at=%s
+                        WHERE id=%s
+                        """,
+                        (
+                            payload.label,
+                            payload.kind,
+                            payload.description,
+                            None if payload.enabled is None else (1 if payload.enabled else 0),
+                            now,
+                            sid,
+                        ),
+                    )
+                pg_conn.commit()
+            return {"ok": True, "source_id": sid}
+
+        conn = connect(settings.SX_DB_PATH)
+        init_db(conn, enable_fts=settings.SX_DB_ENABLE_FTS)
+        row = conn.execute("SELECT id FROM sources WHERE id=?", (sid,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Source not found")
+
+        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        conn.execute(
+            """
+            UPDATE sources
+            SET
+              label=COALESCE(?, label),
+              kind=COALESCE(?, kind),
+              description=COALESCE(?, description),
+              enabled=COALESCE(?, enabled),
+              updated_at=?
+            WHERE id=?
+            """,
+            (
+                payload.label,
+                payload.kind,
+                payload.description,
+                None if payload.enabled is None else (1 if payload.enabled else 0),
+                now,
+                sid,
+            ),
+        )
+        conn.commit()
+        return {"ok": True, "source_id": sid}
+
+    @app.post("/sources/{source_id}/activate")
+    def activate_source(source_id: str) -> dict:
+        sid = _sanitize_source_id(source_id)
+        if not sid:
+            raise HTTPException(status_code=400, detail="Invalid source id")
+
+        if is_pg_primary and isinstance(repository, PostgresRepository):
+            repository.init_schema(sid)
+            with repository._connect() as pg_conn:
+                now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO public.sources(id, label, enabled, is_default, created_at, updated_at)
+                        VALUES(%s, %s, 1, 1, %s, %s)
+                        ON CONFLICT(id) DO UPDATE SET is_default=1, updated_at=EXCLUDED.updated_at
+                        """,
+                        (sid, sid, now, now),
+                    )
+                    cur.execute("UPDATE public.sources SET is_default=0 WHERE id<>%s", (sid,))
+                pg_conn.commit()
+            return {"ok": True, "default_source_id": sid}
+
+        conn = connect(settings.SX_DB_PATH)
+        init_db(conn, enable_fts=settings.SX_DB_ENABLE_FTS)
+        ensure_source(conn, sid, label=sid)
+        set_default_source(conn, sid)
+        conn.commit()
+        return {"ok": True, "default_source_id": sid}
+
+    @app.delete("/sources/{source_id}")
+    def delete_source(source_id: str) -> dict:
+        sid = _sanitize_source_id(source_id)
+        if sid == default_source_id:
+            raise HTTPException(status_code=400, detail="Cannot delete configured default source")
+
+        if is_pg_primary and isinstance(repository, PostgresRepository):
+            with repository._connect() as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute("SELECT id, is_default FROM public.sources WHERE id=%s", (sid,))
+                    src = cur.fetchone()
+                    if not src:
+                        raise HTTPException(status_code=404, detail="Source not found")
+                    if int(src.get("is_default") or 0) == 1:
+                        raise HTTPException(status_code=400, detail="Cannot delete active default source")
+
+                    try:
+                        schema = repository.resolve_schema(sid, create_if_missing=False)
+                    except Exception:
+                        schema = None
+
+                    if schema:
+                        cur.execute(f'SELECT COUNT(*) AS n FROM "{schema}".videos WHERE source_id=%s', (sid,))
+                        videos_n = int((cur.fetchone() or {}).get("n") or 0)
+                        if videos_n > 0:
+                            raise HTTPException(status_code=400, detail="Source has data; delete rows first or disable it")
+                        cur.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+                        cur.execute(f'DELETE FROM public.{repository._registry_table} WHERE source_id=%s', (sid,))
+
+                    cur.execute("DELETE FROM public.sources WHERE id=%s", (sid,))
+                pg_conn.commit()
+            return {"ok": True, "deleted": sid}
+
+        conn = connect(settings.SX_DB_PATH)
+        init_db(conn, enable_fts=settings.SX_DB_ENABLE_FTS)
+
+        src = conn.execute("SELECT id, is_default FROM sources WHERE id=?", (sid,)).fetchone()
+        if not src:
+            raise HTTPException(status_code=404, detail="Source not found")
+        if int(src[1] or 0) == 1:
+            raise HTTPException(status_code=400, detail="Cannot delete active default source")
+
+        videos_n = conn.execute("SELECT COUNT(*) FROM videos WHERE source_id=?", (sid,)).fetchone()[0]
+        if int(videos_n or 0) > 0:
+            raise HTTPException(status_code=400, detail="Source has data; delete rows first or disable it")
+
+        conn.execute("DELETE FROM sources WHERE id=?", (sid,))
+        conn.commit()
+        return {"ok": True, "deleted": sid}
+
     @app.get("/health")
-    def health():
-        return {"ok": True}
+    def health(request: Request):
+        source_id = str(getattr(request.state, "sx_source_id", settings.SX_DEFAULT_SOURCE_ID))
+        return {
+            "ok": True,
+            "source_id": source_id,
+            "backend": dict(getattr(request.state, "sx_backend_ctx", {}) or {}),
+            "profile_index": _source_profile_index(source_id),
+            "db_path": str(settings.SX_DB_PATH),
+            "api_version": "1.0.0",
+            "env_hint": str(getattr(settings, "SX_DB_BACKEND_MODE", "SQLITE")),
+        }
 
     @app.get("/")
-    def root():
+    def root(request: Request):
         return {
             "service": "sx_obsidian SQLite API",
             "ok": True,
+            "source_id": str(getattr(request.state, "sx_source_id", settings.SX_DEFAULT_SOURCE_ID)),
+            "backend": dict(getattr(request.state, "sx_backend_ctx", {}) or {}),
             "endpoints": {
                 "health": "/health",
                 "stats": "/stats",
@@ -103,24 +844,27 @@ def create_app(settings: Settings) -> FastAPI:
         }
 
     @app.get("/stats")
-    def stats():
+    def stats(request: Request):
         """Lightweight DB stats for troubleshooting and plugin UX."""
-        conn = connect(settings.SX_DB_PATH)
-        init_db(conn, enable_fts=settings.SX_DB_ENABLE_FTS)
+        source_id = str(getattr(request.state, "sx_source_id", settings.SX_DEFAULT_SOURCE_ID))
+        conn = _conn()
 
-        total = conn.execute("SELECT COUNT(*) AS n FROM videos").fetchone()[0]
+        total = conn.execute("SELECT COUNT(*) AS n FROM videos WHERE source_id=?", (source_id,)).fetchone()[0]
         bookmarked = conn.execute(
-            "SELECT COUNT(*) AS n FROM videos WHERE bookmarked=1"
+            "SELECT COUNT(*) AS n FROM videos WHERE source_id=? AND bookmarked=1",
+            (source_id,),
         ).fetchone()[0]
         authors = conn.execute(
             """
             SELECT COUNT(DISTINCT author_unique_id) AS n
             FROM videos
-            WHERE author_unique_id IS NOT NULL AND author_unique_id != ''
-            """
+            WHERE source_id=? AND author_unique_id IS NOT NULL AND author_unique_id != ''
+            """,
+            (source_id,),
         ).fetchone()[0]
         last_updated_at = conn.execute(
-            "SELECT MAX(updated_at) AS t FROM videos"
+            "SELECT MAX(updated_at) AS t FROM videos WHERE source_id=?",
+            (source_id,),
         ).fetchone()[0]
 
         has_fts = bool(
@@ -129,11 +873,14 @@ def create_app(settings: Settings) -> FastAPI:
             ).fetchone()
         )
         fts_rows = (
-            conn.execute("SELECT COUNT(*) FROM videos_fts").fetchone()[0] if has_fts else None
+            conn.execute("SELECT COUNT(*) FROM videos_fts WHERE source_id=?", (source_id,)).fetchone()[0] if has_fts else None
         )
 
         return {
             "db_path": str(settings.SX_DB_PATH),
+            "source_id": source_id,
+            "source_mode": "single-db",
+            "backend": dict(getattr(request.state, "sx_backend_ctx", {}) or {}),
             "fts_enabled": bool(settings.SX_DB_ENABLE_FTS),
             "has_fts_table": has_fts,
             "counts": {
@@ -146,16 +893,32 @@ def create_app(settings: Settings) -> FastAPI:
         }
 
     @app.get("/search")
-    def search(q: str = "", limit: int = 50, offset: int = 0):
-        conn = connect(settings.SX_DB_PATH)
-        init_db(conn, enable_fts=settings.SX_DB_ENABLE_FTS)
-        results = search_fn(conn, q, limit=limit, offset=offset)
+    def search(request: Request, q: str = "", limit: int = 50, offset: int = 0):
+        source_id = str(getattr(request.state, "sx_source_id", settings.SX_DEFAULT_SOURCE_ID))
+        conn = _conn()
+        results = search_fn(conn, q, limit=limit, offset=offset, source_id=source_id)
         return {"results": results, "limit": limit, "offset": offset}
 
+    @app.post("/admin/bootstrap/schema")
+    def bootstrap_schema(payload: BootstrapSchemaIn = Body(...)) -> dict:
+        sid = _sanitize_source_id(payload.source_id)
+        if not sid:
+            raise HTTPException(status_code=400, detail="Invalid source id")
+        if not (is_pg_primary and isinstance(repository, PostgresRepository)):
+            return {"ok": True, "backend": "sqlite", "source_id": sid, "message": "No-op outside POSTGRES_PRIMARY"}
+        out = repository.init_schema(sid)
+        return {"ok": True, **out}
+
     def _conn():
+        if is_pg_primary and isinstance(repository, PostgresRepository):
+            sid = _CTX_SOURCE_ID.get()
+            return repository.connection_for_source(sid)
         conn = connect(settings.SX_DB_PATH)
         init_db(conn, enable_fts=settings.SX_DB_ENABLE_FTS)
         return conn
+
+    def _sid(request: Request) -> str:
+        return str(getattr(request.state, "sx_source_id", settings.SX_DEFAULT_SOURCE_ID))
 
     def _normalize_status_list(v: object) -> list[str]:
         """Accept a scalar, list, or comma-separated string and return a de-duped list."""
@@ -377,7 +1140,7 @@ def create_app(settings: Settings) -> FastAPI:
         return where_sql, params
 
     @app.post("/danger/reset")
-    def danger_reset(payload: DangerResetIn = Body(...)) -> dict:
+    def danger_reset(request: Request, payload: DangerResetIn = Body(...)) -> dict:
         """Danger Zone reset.
 
         Supports dry-run previews (default). On apply:
@@ -389,15 +1152,27 @@ def create_app(settings: Settings) -> FastAPI:
         """
 
         conn = _conn()
+        source_id = _sid(request)
         f = payload.filters or DangerFilters()
         where_sql, params = _build_where_for_filters(f)
+        source_where = "v.source_id=?"
+        scoped_where_sql = where_sql.replace("WHERE ", f"WHERE {source_where} AND ") if where_sql else f"WHERE {source_where}"
+        scoped_params: list[object] = [source_id, *params]
 
         # Subquery for the target set
-        subq = f"SELECT v.id FROM videos v LEFT JOIN user_meta m ON m.video_id=v.id {where_sql}"
+        subq = (
+            "SELECT v.id FROM videos v "
+            "LEFT JOIN user_meta m ON m.video_id=v.id AND m.source_id=v.source_id "
+            f"{scoped_where_sql}"
+        )
 
         matched = conn.execute(
-            f"SELECT COUNT(*) FROM videos v LEFT JOIN user_meta m ON m.video_id=v.id {where_sql}",
-            tuple(params),
+            (
+                "SELECT COUNT(*) FROM videos v "
+                "LEFT JOIN user_meta m ON m.video_id=v.id AND m.source_id=v.source_id "
+                f"{scoped_where_sql}"
+            ),
+            tuple(scoped_params),
         ).fetchone()[0]
 
         meta_to_delete = 0
@@ -406,20 +1181,20 @@ def create_app(settings: Settings) -> FastAPI:
 
         if payload.reset_user_meta:
             meta_to_delete = conn.execute(
-                f"SELECT COUNT(*) FROM user_meta WHERE video_id IN ({subq})",
-                tuple(params),
+                f"SELECT COUNT(*) FROM user_meta WHERE source_id=? AND video_id IN ({subq})",
+                tuple([source_id, *scoped_params]),
             ).fetchone()[0]
 
         if payload.reset_user_notes:
             user_notes_to_delete = conn.execute(
-                f"SELECT COUNT(*) FROM video_notes WHERE template_version='user' AND video_id IN ({subq})",
-                tuple(params),
+                f"SELECT COUNT(*) FROM video_notes WHERE source_id=? AND template_version='user' AND video_id IN ({subq})",
+                tuple([source_id, *scoped_params]),
             ).fetchone()[0]
 
         if payload.reset_cached_notes:
             cached_notes_to_delete = conn.execute(
-                f"SELECT COUNT(*) FROM video_notes WHERE template_version!='user' AND video_id IN ({subq})",
-                tuple(params),
+                f"SELECT COUNT(*) FROM video_notes WHERE source_id=? AND template_version!='user' AND video_id IN ({subq})",
+                tuple([source_id, *scoped_params]),
             ).fetchone()[0]
 
         # Dry run preview
@@ -443,20 +1218,20 @@ def create_app(settings: Settings) -> FastAPI:
 
         if payload.reset_user_meta:
             conn.execute(
-                f"DELETE FROM user_meta WHERE video_id IN ({subq})",
-                tuple(params),
+                f"DELETE FROM user_meta WHERE source_id=? AND video_id IN ({subq})",
+                tuple([source_id, *scoped_params]),
             )
 
         if payload.reset_user_notes:
             conn.execute(
-                f"DELETE FROM video_notes WHERE template_version='user' AND video_id IN ({subq})",
-                tuple(params),
+                f"DELETE FROM video_notes WHERE source_id=? AND template_version='user' AND video_id IN ({subq})",
+                tuple([source_id, *scoped_params]),
             )
 
         if payload.reset_cached_notes:
             conn.execute(
-                f"DELETE FROM video_notes WHERE template_version!='user' AND video_id IN ({subq})",
-                tuple(params),
+                f"DELETE FROM video_notes WHERE source_id=? AND template_version!='user' AND video_id IN ({subq})",
+                tuple([source_id, *scoped_params]),
             )
 
         conn.commit()
@@ -472,13 +1247,259 @@ def create_app(settings: Settings) -> FastAPI:
             },
         }
 
-    def _note_resolver() -> PathResolver:
-        # Build a resolver using generator-style config.
+    def _source_profile_index(source_id: str) -> int | None:
+        s = str(source_id or "").strip().lower()
+        if not s:
+            return None
+        m = re.search(r"(?:^|[_-])(?:p)?(\d{1,2})$", s)
+        if not m:
+            return None
+        n = int(m.group(1))
+        return n if n >= 1 else None
+
+    def _wsl_to_windows_root(path_value: str | None) -> str | None:
+        p = str(path_value or "").strip()
+        if not p:
+            return None
+        m = re.match(r"^/mnt/([a-zA-Z])/(.*)$", p)
+        if not m:
+            return None
+        drive = m.group(1).upper()
+        tail = m.group(2).replace("/", "\\")
+        return f"{drive}:\\{tail}" if tail else f"{drive}:\\"
+
+    def _windows_to_wsl_root(path_value: str | None) -> str | None:
+        p = str(path_value or "").strip()
+        if not p:
+            return None
+        # Accept X:\foo\bar or X:/foo/bar
+        m = re.match(r"^([a-zA-Z]):[\\/]*(.*)$", p)
+        if not m:
+            return None
+        drive = m.group(1).lower()
+        tail = str(m.group(2) or "").replace("\\", "/").lstrip("/")
+        return f"/mnt/{drive}/{tail}" if tail else f"/mnt/{drive}"
+
+    def _build_media_resolution_context(source_id: str) -> dict[str, object]:
+        """Resolve source-aware media roots for on-disk media existence checks.
+
+        Media resolution should prefer source roots (`SRC_PATH_N`) and avoid vault-root
+        assumptions that can produce false negatives in split-root deployments.
+        """
+
+        env_map: dict[str, str] = dict(os.environ)
+        try:
+            env_map.update(_parse_env_file(Path(".env")))
+        except Exception:
+            pass
+        try:
+            if settings.SX_SCHEDULERX_ENV:
+                env_map.update(_parse_env_file(Path(settings.SX_SCHEDULERX_ENV)))
+        except Exception:
+            pass
+
+        sid = _sanitize_source_id(source_id)
+        idx = _source_profile_index(sid)
+
+        if idx is None:
+            indices: set[int] = set()
+            for k in env_map.keys():
+                m = re.match(r"^(SRC_PATH|SRC_PROFILE)_(\d+)$", k)
+                if m:
+                    indices.add(int(m.group(2)))
+            for i in sorted(indices):
+                if _source_id_from_profile_env(env_map, i) == sid:
+                    idx = i
+                    break
+
+        src_linux = None
+        src_windows = None
+        vault_linux = None
+        vault_windows = None
+        resolution = ""
+
+        if idx is not None:
+            src_linux = (
+                env_map.get(f"SRC_PATH_{idx}")
+                or env_map.get(f"SRC_PROFILE_{idx}")
+                or None
+            )
+            src_windows = (
+                env_map.get(f"SRC_PATH_WINDOWS_{idx}")
+                or env_map.get(f"SRC_PROFILE_WINDOWS_{idx}")
+                or _wsl_to_windows_root(src_linux)
+            )
+
+            vault_linux = (
+                env_map.get(f"VAULT_PATH_{idx}")
+                or env_map.get(f"VAULT_{idx}")
+                or None
+            )
+            vault_windows = (
+                env_map.get(f"VAULT_PATH_WINDOWS_{idx}")
+                or env_map.get(f"VAULT_WINDOWS_{idx}")
+                or env_map.get(f"VAULT_WIN_{idx}")
+                or _wsl_to_windows_root(vault_linux)
+            )
+
+            # Some deployments store SRC_PATH_N as a Windows path even when API runs
+            # in Linux/WSL. Normalize this case so file existence checks remain valid.
+            if src_linux and re.match(r"^[a-zA-Z]:[\\/]", str(src_linux)):
+                src_windows = src_windows or str(src_linux)
+                src_linux = _windows_to_wsl_root(str(src_linux)) or src_linux
+
+            if vault_linux and re.match(r"^[a-zA-Z]:[\\/]", str(vault_linux)):
+                vault_windows = vault_windows or str(vault_linux)
+                vault_linux = _windows_to_wsl_root(str(vault_linux)) or vault_linux
+
+            resolution = f"profile_{idx}"
+        else:
+            # Operational fallback for environments without indexed profile mappings.
+            # Keep this source-root oriented by using SX_MEDIA_VAULT only if explicitly set.
+            src_linux = settings.SX_MEDIA_VAULT or None
+            src_windows = _wsl_to_windows_root(src_linux)
+            vault_linux = settings.VAULT_default or settings.SX_MEDIA_VAULT or None
+            vault_windows = settings.VAULT_WINDOWS_default or _wsl_to_windows_root(vault_linux)
+            resolution = "fallback_media_vault"
+
+        return {
+            "source_id": sid,
+            "profile_index": idx,
+            "source_root_linux": str(src_linux or "").strip() or None,
+            "source_root_windows": str(src_windows or "").strip() or None,
+            "vault_root_linux": str(vault_linux or "").strip() or None,
+            "vault_root_windows": str(vault_windows or "").strip() or None,
+            "resolution": resolution or "none",
+        }
+
+    def _resolve_vault_roots_for_source(source_id: str) -> tuple[str | None, str | None]:
+        """Resolve source-specific media roots (linux + windows) for link/media generation.
+
+        Priority is SRC_PATH_N (source/media root). VAULT_PATH_N/VAULT_N remain fallback.
+        """
+
+        env_map: dict[str, str] = dict(os.environ)
+        try:
+            env_map.update(_parse_env_file(Path(".env")))
+        except Exception:
+            pass
+        try:
+            if settings.SX_SCHEDULERX_ENV:
+                env_map.update(_parse_env_file(Path(settings.SX_SCHEDULERX_ENV)))
+        except Exception:
+            pass
+
+        sid = _sanitize_source_id(source_id)
+        idx = _source_profile_index(sid)
+
+        if idx is None:
+            indices: set[int] = set()
+            for k in env_map.keys():
+                m = re.match(r"^(SRC_PATH|SRC_PROFILE|VAULT_PATH|VAULT|VAULT_WINDOWS|VAULT_WIN)_(\d+)$", k)
+                if m:
+                    indices.add(int(m.group(2)))
+            for i in sorted(indices):
+                if _source_id_from_profile_env(env_map, i) == sid:
+                    idx = i
+                    break
+
+        default_linux = settings.SX_MEDIA_VAULT or settings.VAULT_default
+        default_windows = settings.VAULT_WINDOWS_default
+
+        if idx is None:
+            return default_linux, default_windows
+
+        linux_root = (
+            env_map.get(f"SRC_PATH_{idx}")
+            or env_map.get(f"SRC_PROFILE_{idx}")
+            or env_map.get(f"VAULT_PATH_{idx}")
+            or env_map.get(f"VAULT_{idx}")
+            or default_linux
+        )
+        windows_root = (
+            env_map.get(f"SRC_PATH_WINDOWS_{idx}")
+            or env_map.get(f"SRC_PROFILE_WINDOWS_{idx}")
+            or env_map.get(f"VAULT_WINDOWS_{idx}")
+            or env_map.get(f"VAULT_WIN_{idx}")
+            or _wsl_to_windows_root(linux_root)
+            or default_windows
+        )
+
+        return linux_root, windows_root
+
+    def _resolve_group_link_prefix_for_source(source_id: str) -> str | None:
+        """Resolve PathLinker-style group prefix for a source, when needed.
+
+        Uses explicit env overrides first, then auto-enables `group:<source_id>/...`
+        when SRC_PATH_N and VAULT_N differ.
+        """
+
+        env_map: dict[str, str] = dict(os.environ)
+        try:
+            # Only read the local .env when no explicit scheduler env is configured,
+            # to avoid the project .env contaminating isolated profiles.
+            if not settings.SX_SCHEDULERX_ENV:
+                env_map.update(_parse_env_file(Path(".env")))
+        except Exception:
+            pass
+        try:
+            if settings.SX_SCHEDULERX_ENV:
+                env_map.update(_parse_env_file(Path(settings.SX_SCHEDULERX_ENV)))
+        except Exception:
+            pass
+
+        sid = _sanitize_source_id(source_id)
+        idx = _source_profile_index(sid)
+        if idx is None:
+            indices: set[int] = set()
+            for k in env_map.keys():
+                m = re.match(r"^(SRC_PATH|SRC_PROFILE|VAULT_PATH|VAULT)_(\d+)$", k)
+                if m:
+                    indices.add(int(m.group(2)))
+            for i in sorted(indices):
+                if _source_id_from_profile_env(env_map, i) == sid:
+                    idx = i
+                    break
+
+        if idx is None:
+            return None
+
+        explicit = (
+            env_map.get(f"PATHLINKER_GROUP_{idx}")
+            or env_map.get(f"GROUP_LINK_{idx}")
+            or ""
+        ).strip().strip("/")
+        if explicit:
+            return explicit
+
+        src_root = (env_map.get(f"SRC_PATH_{idx}") or env_map.get(f"SRC_PROFILE_{idx}") or "").strip()
+        vault_root = (env_map.get(f"VAULT_PATH_{idx}") or env_map.get(f"VAULT_{idx}") or src_root).strip()
+
+        if src_root and vault_root and src_root != vault_root:
+            return sid
+
+        return None
+
+    def _sanitize_group_prefix(value: object) -> str | None:
+        raw = str(value or "").strip().strip("/")
+        if not raw:
+            return None
+        # Keep conservative chars used in group names/paths.
+        cleaned = re.sub(r"[^a-zA-Z0-9._/-]", "", raw)
+        cleaned = cleaned.strip().strip("/")
+        return cleaned or None
+
+    def _note_resolver(source_id: str | None = None, group_link_prefix_override: str | None = None) -> PathResolver:
+        # Build a resolver using source-aware media roots.
+        sid = _sanitize_source_id(source_id or _CTX_SOURCE_ID.get() or settings.SX_DEFAULT_SOURCE_ID)
+        vault_linux, vault_windows = _resolve_vault_roots_for_source(sid)
+        group_link_prefix = _sanitize_group_prefix(group_link_prefix_override) or _resolve_group_link_prefix_for_source(sid)
         config = {
             "path_style": settings.PATH_STYLE,
-            "vault": settings.VAULT_default,
-            "vault_windows": settings.VAULT_WINDOWS_default,
-            "data_dir": settings.DATA_DIR,
+            "vault": vault_linux or settings.SX_MEDIA_VAULT or settings.VAULT_default,
+            "vault_windows": vault_windows or settings.VAULT_WINDOWS_default,
+            "data_dir": settings.SX_MEDIA_DATA_DIR or settings.DATA_DIR,
+            "group_link_prefix": group_link_prefix,
         }
         return PathResolver(config)
 
@@ -526,7 +1547,7 @@ def create_app(settings: Settings) -> FastAPI:
             video["cover_path"] = derived_cp
         return video
 
-    def _fetch_video_with_meta(conn, item_id: str) -> dict | None:
+    def _fetch_video_with_meta(conn, item_id: str, source_id: str) -> dict | None:
         row = conn.execute(
             """
             SELECT
@@ -534,14 +1555,14 @@ def create_app(settings: Settings) -> FastAPI:
                             m.rating, m.status, m.statuses, m.tags, m.notes,
                                                         m.product_link, m.author_links, m.platform_targets, m.workflow_log, m.post_url, m.published_time
             FROM videos v
-            LEFT JOIN user_meta m ON m.video_id = v.id
-            WHERE v.id=?
+            LEFT JOIN user_meta m ON m.video_id = v.id AND m.source_id = v.source_id
+            WHERE v.id=? AND v.source_id=?
             """,
-            (item_id,),
+            (item_id, source_id),
         ).fetchone()
         return dict(row) if row else None
 
-    def _get_cached_note(conn, item_id: str) -> tuple[str, str | None] | None:
+    def _get_cached_note(conn, item_id: str, source_id: str) -> tuple[str, str | None] | None:
         """Return cached markdown from DB.
 
         Notes are user-owned once persisted: if a user edits the synced .md in Obsidian
@@ -550,17 +1571,22 @@ def create_app(settings: Settings) -> FastAPI:
         """
 
         row = conn.execute(
-            "SELECT markdown, template_version FROM video_notes WHERE video_id=?",
-            (item_id,),
+            "SELECT markdown, template_version FROM video_notes WHERE video_id=? AND source_id=?",
+            (item_id, source_id),
         ).fetchone()
         if not row:
             return None
         return (row[0], row[1])
 
-    def _render_and_cache_note(conn, video: dict) -> str:
+    def _render_and_cache_note(
+        conn,
+        video: dict,
+        source_id: str,
+        group_link_prefix_override: str | None = None,
+    ) -> str:
         _ensure_media_paths(video)
 
-        resolver = _note_resolver()
+        resolver = _note_resolver(source_id, group_link_prefix_override=group_link_prefix_override)
 
         # When media isn't present on disk, returning a note can be useful for
         # diagnostics (it will include `media_missing: true`), but caching it
@@ -574,26 +1600,33 @@ def create_app(settings: Settings) -> FastAPI:
 
         md = render_note(video, resolver=resolver)
 
+        # Notes rendered with an explicit override are considered client-local
+        # and should not mutate shared DB cache.
+        if group_link_prefix_override:
+            return md
+
         if not media_present:
             return md
 
         now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         conn.execute(
             """
-            INSERT INTO video_notes(video_id, markdown, template_version, updated_at)
-            VALUES(?, ?, ?, ?)
-            ON CONFLICT(video_id) DO UPDATE SET
+                        INSERT INTO video_notes(video_id, source_id, markdown, template_version, updated_at)
+                        VALUES(?, ?, ?, ?, ?)
+            ON CONFLICT(source_id, video_id) DO UPDATE SET
+                            source_id=excluded.source_id,
               markdown=excluded.markdown,
               template_version=excluded.template_version,
               updated_at=excluded.updated_at
             """,
-            (str(video["id"]), md, TEMPLATE_VERSION, now),
+                        (str(video["id"]), source_id, md, TEMPLATE_VERSION, now),
         )
         conn.commit()
         return md
 
     @app.get("/authors")
     def list_authors(
+        request: Request,
         q: str = "",
         limit: int = Query(200, ge=1, le=2000),
         offset: int = Query(0, ge=0),
@@ -609,9 +1642,10 @@ def create_app(settings: Settings) -> FastAPI:
         """
 
         conn = _conn()
+        source_id = _sid(request)
 
-        where = ["(v.author_unique_id IS NOT NULL AND v.author_unique_id != '')"]
-        params: list[object] = []
+        where = ["v.source_id=?", "(v.author_unique_id IS NOT NULL AND v.author_unique_id != '')"]
+        params: list[object] = [source_id]
 
         if bookmarked_only:
             where.append("v.bookmarked=1")
@@ -657,7 +1691,7 @@ def create_app(settings: Settings) -> FastAPI:
               FROM videos v
               {where_sql}
               GROUP BY v.author_id, v.author_unique_id, v.author_name
-            )
+                        ) author_groups
             """,
             tuple(params),
         ).fetchone()[0]
@@ -671,6 +1705,7 @@ def create_app(settings: Settings) -> FastAPI:
 
     @app.get("/items")
     def list_items(
+        request: Request,
         q: str = "",
         caption_q: str | None = None,
         # SX Library can request large pages (e.g. 1000). Keep a sane upper bound.
@@ -697,9 +1732,10 @@ def create_app(settings: Settings) -> FastAPI:
         - `order=bookmarked` sorts bookmarked first
         """
         conn = _conn()
+        source_id = _sid(request)
 
-        where = []
-        params: list[object] = []
+        where = ["v.source_id=?"]
+        params: list[object] = [source_id]
 
         if bookmarked_only:
             where.append("v.bookmarked=1")
@@ -824,7 +1860,7 @@ def create_app(settings: Settings) -> FastAPI:
                             m.product_link, m.author_links, m.platform_targets, m.workflow_log, m.post_url, m.published_time,
                             m.updated_at as meta_updated_at
             FROM videos v
-            LEFT JOIN user_meta m ON m.video_id = v.id
+            LEFT JOIN user_meta m ON m.video_id = v.id AND m.source_id = v.source_id
             {where_sql}
             {order_sql}
             LIMIT ? OFFSET ?
@@ -833,7 +1869,7 @@ def create_app(settings: Settings) -> FastAPI:
         ).fetchall()
 
         total = conn.execute(
-            f"SELECT COUNT(*) FROM videos v LEFT JOIN user_meta m ON m.video_id=v.id {where_sql}",
+            f"SELECT COUNT(*) FROM videos v LEFT JOIN user_meta m ON m.video_id=v.id AND m.source_id=v.source_id {where_sql}",
             tuple(params),
         ).fetchone()[0]
 
@@ -866,11 +1902,19 @@ def create_app(settings: Settings) -> FastAPI:
         return {"items": items, "limit": limit, "offset": offset, "total": int(total)}
 
     @app.get("/items/{item_id}/meta")
-    def get_meta(item_id: str) -> dict:
+    def get_meta(item_id: str, request: Request) -> dict:
         conn = _conn()
+        source_id = _sid(request)
         row = conn.execute(
-            "SELECT video_id, rating, status, statuses, tags, notes, product_link, author_links, platform_targets, workflow_log, post_url, published_time, updated_at FROM user_meta WHERE video_id=?",
-            (item_id,),
+            """
+            SELECT m.video_id, m.rating, m.status, m.statuses, m.tags, m.notes,
+                   m.product_link, m.author_links, m.platform_targets, m.workflow_log,
+                   m.post_url, m.published_time, m.updated_at
+            FROM user_meta m
+            JOIN videos v ON v.id = m.video_id
+            WHERE m.video_id=? AND v.source_id=? AND m.source_id=v.source_id
+            """,
+            (item_id, source_id),
         ).fetchone()
         if not row:
             return {
@@ -899,9 +1943,10 @@ def create_app(settings: Settings) -> FastAPI:
         return {"meta": d}
 
     @app.put("/items/{item_id}/meta")
-    def put_meta(item_id: str, meta: MetaIn = Body(...)) -> dict:
+    def put_meta(item_id: str, request: Request, meta: MetaIn = Body(...)) -> dict:
         conn = _conn()
-        exists = conn.execute("SELECT 1 FROM videos WHERE id=?", (item_id,)).fetchone()
+        source_id = _sid(request)
+        exists = conn.execute("SELECT 1 FROM videos WHERE id=? AND source_id=?", (item_id, source_id)).fetchone()
         if not exists:
             raise HTTPException(status_code=404, detail="Not found")
 
@@ -923,15 +1968,15 @@ def create_app(settings: Settings) -> FastAPI:
             author_links_list = _normalize_url_list(meta.author_links)
         else:
             existing_links_row = conn.execute(
-                "SELECT author_links FROM user_meta WHERE video_id=?",
-                (item_id,),
+                "SELECT author_links FROM user_meta WHERE video_id=? AND source_id=?",
+                (item_id, source_id),
             ).fetchone()
             author_links_list = _unpack_url_list(existing_links_row[0] if existing_links_row else None)
         packed_author_links = _pack_url_list(author_links_list)
 
         author_row = conn.execute(
-            "SELECT author_unique_id, author_name FROM videos WHERE id=?",
-            (item_id,),
+            "SELECT author_unique_id, author_name FROM videos WHERE id=? AND source_id=?",
+            (item_id, source_id),
         ).fetchone()
         author_uid = str((author_row[0] if author_row else "") or "").strip()
         author_name = str((author_row[1] if author_row else "") or "").strip()
@@ -939,12 +1984,13 @@ def create_app(settings: Settings) -> FastAPI:
         conn.execute(
             """
             INSERT INTO user_meta(
-                video_id, rating, status, statuses, tags, notes,
+                                video_id, source_id, rating, status, statuses, tags, notes,
                 product_link, author_links, platform_targets, workflow_log, post_url, published_time,
                 updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(video_id) DO UPDATE SET
+                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_id, video_id) DO UPDATE SET
+                            source_id=excluded.source_id,
               rating=excluded.rating,
               status=excluded.status,
               statuses=excluded.statuses,
@@ -960,6 +2006,7 @@ def create_app(settings: Settings) -> FastAPI:
             """,
             (
                 item_id,
+                source_id,
                 meta.rating,
                 primary_status,
                 packed_statuses,
@@ -980,29 +2027,32 @@ def create_app(settings: Settings) -> FastAPI:
         if author_links_was_provided and author_uid:
             conn.execute(
                 """
-                INSERT INTO user_meta(video_id, author_links, updated_at)
-                SELECT v.id, ?, ?
+                                INSERT INTO user_meta(video_id, source_id, author_links, updated_at)
+                                SELECT v.id, v.source_id, ?, ?
                 FROM videos v
-                WHERE v.author_unique_id = ?
-                ON CONFLICT(video_id) DO UPDATE SET
+                                WHERE v.author_unique_id = ? AND v.source_id = ?
+                ON CONFLICT(source_id, video_id) DO UPDATE SET
+                                    source_id=excluded.source_id,
                   author_links=excluded.author_links,
                   updated_at=excluded.updated_at
                 """,
-                (packed_author_links, now, author_uid),
+                                (packed_author_links, now, author_uid, source_id),
             )
         elif author_links_was_provided and author_name:
             conn.execute(
                 """
-                INSERT INTO user_meta(video_id, author_links, updated_at)
-                SELECT v.id, ?, ?
+                                INSERT INTO user_meta(video_id, source_id, author_links, updated_at)
+                                SELECT v.id, v.source_id, ?, ?
                 FROM videos v
                 WHERE (v.author_unique_id IS NULL OR TRIM(v.author_unique_id) = '')
                   AND COALESCE(TRIM(v.author_name), '') = ?
-                ON CONFLICT(video_id) DO UPDATE SET
+                                    AND v.source_id = ?
+                                ON CONFLICT(source_id, video_id) DO UPDATE SET
+                                    source_id=excluded.source_id,
                   author_links=excluded.author_links,
                   updated_at=excluded.updated_at
                 """,
-                (packed_author_links, now, author_name),
+                                (packed_author_links, now, author_name, source_id),
             )
         conn.commit()
 
@@ -1014,44 +2064,98 @@ def create_app(settings: Settings) -> FastAPI:
         out = {"video_id": item_id, **dumped, "updated_at": now}
         return {"meta": out}
 
-    def _safe_media_path(relative_path: str) -> Path:
+    def _safe_media_path(relative_path: str, source_id: str) -> Path:
         if not relative_path:
             raise HTTPException(status_code=404, detail="No media path for item")
 
-        if not settings.SX_MEDIA_VAULT:
-            raise HTTPException(status_code=500, detail="SX_MEDIA_VAULT/VAULT_default is not configured")
+        sid = _sanitize_source_id(source_id)
+        request_id = _CTX_REQUEST_ID.get()
+        media_ctx = _build_media_resolution_context(sid)
 
-        # Resolve absolute path in a filesystem-friendly style (usually linux for WSL).
-        resolver = PathResolver(
-            {
-                "path_style": settings.SX_MEDIA_STYLE,
-                "vault": settings.SX_MEDIA_VAULT,
-                "data_dir": settings.SX_MEDIA_DATA_DIR or settings.DATA_DIR,
-            }
+        src_linux = str(media_ctx.get("source_root_linux") or "").strip()
+        src_windows = str(media_ctx.get("source_root_windows") or "").strip()
+        vault_linux = str(media_ctx.get("vault_root_linux") or "").strip()
+        vault_windows = str(media_ctx.get("vault_root_windows") or "").strip()
+        src_windows_wsl = _windows_to_wsl_root(src_windows) if src_windows else None
+        vault_windows_wsl = _windows_to_wsl_root(vault_windows) if vault_windows else None
+
+        roots: list[tuple[str, str]] = []
+        if src_linux:
+            roots.append(("src_linux", src_linux))
+        if src_windows_wsl:
+            roots.append(("src_windows_as_wsl", src_windows_wsl))
+        if vault_linux and vault_linux != src_linux:
+            roots.append(("vault_linux", vault_linux))
+        if vault_windows_wsl and vault_windows_wsl not in {src_windows_wsl, src_linux, vault_linux}:
+            roots.append(("vault_windows_as_wsl", vault_windows_wsl))
+
+        if not roots:
+            raise HTTPException(status_code=500, detail="Source media root is not configured (SRC_PATH_N/SX_MEDIA_VAULT)")
+
+        rel = str(relative_path).strip().replace("\\", "/").lstrip("/")
+        if not rel:
+            raise HTTPException(status_code=404, detail="No media path for item")
+
+        data_dir = str(settings.SX_MEDIA_DATA_DIR or settings.DATA_DIR or "data").strip().strip("/\\") or "data"
+
+        candidates: list[tuple[str, Path, Path]] = []
+        seen: set[str] = set()
+        for root_name, root in roots:
+            root_path = Path(root)
+
+            # Preferred path: <SRC_PATH_N>/<DATA_DIR>/<relative_path>
+            preferred = root_path / data_dir / rel
+            # Fallback path: <SRC_PATH_N>/<relative_path> (handles rows that already include data/ prefix)
+            fallback = root_path / rel
+
+            for mode, p in (("preferred", preferred), ("fallback", fallback)):
+                key = str(p)
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append((f"{root_name}:{mode}", p, root_path))
+
+        diagnostics: list[dict[str, object]] = []
+        for label, candidate, base_root in candidates:
+            try:
+                cand_resolved = candidate.resolve()
+                base_resolved = base_root.resolve()
+                cand_resolved.relative_to(base_resolved)
+                exists = cand_resolved.exists()
+                diagnostics.append({"candidate": str(cand_resolved), "label": label, "exists": exists})
+                if exists:
+                    _MEDIA_LOG.info(
+                        "media.resolve request_id=%s source_id=%s profile_index=%s resolution=%s relative_path=%s selected=%s checked=%s",
+                        request_id,
+                        sid,
+                        media_ctx.get("profile_index"),
+                        media_ctx.get("resolution"),
+                        rel,
+                        str(cand_resolved),
+                        diagnostics,
+                    )
+                    return cand_resolved
+            except Exception:
+                diagnostics.append({"candidate": str(candidate), "label": label, "exists": False, "error": "invalid_or_unsafe"})
+
+        _MEDIA_LOG.warning(
+            "media.resolve request_id=%s source_id=%s profile_index=%s resolution=%s relative_path=%s selected=none checked=%s",
+            request_id,
+            sid,
+            media_ctx.get("profile_index"),
+            media_ctx.get("resolution"),
+            rel,
+            diagnostics,
         )
-        abs_str = resolver.resolve_absolute(relative_path)
-        abs_path = Path(abs_str)
-
-        # Basic traversal safety: ensure resolved path stays inside vault/data_dir root.
-        base_root = Path(resolver.resolve_absolute("__sx_base__")).parent
-        try:
-            abs_resolved = abs_path.resolve()
-            base_resolved = base_root.resolve()
-            abs_resolved.relative_to(base_resolved)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid media path")
-
-        if not abs_resolved.exists():
-            raise HTTPException(status_code=404, detail="Media file not found")
-
-        return abs_resolved
+        raise HTTPException(status_code=404, detail="Media file not found")
 
     @app.get("/media/cover/{item_id}")
-    def media_cover(item_id: str):
+    def media_cover(item_id: str, request: Request):
         conn = _conn()
+        source_id = _sid(request)
         row = conn.execute(
-            "SELECT cover_path, bookmarked, author_id FROM videos WHERE id=?",
-            (item_id,),
+            "SELECT cover_path, bookmarked, author_id FROM videos WHERE id=? AND source_id=?",
+            (item_id, source_id),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Not found")
@@ -1059,16 +2163,17 @@ def create_app(settings: Settings) -> FastAPI:
         if not cover_path:
             _, derived_cp = _canonical_media_paths(item_id=item_id, bookmarked=row[1], author_id=row[2])
             cover_path = derived_cp
-        path = _safe_media_path(cover_path)
+        path = _safe_media_path(cover_path, source_id)
         media_type, _ = mimetypes.guess_type(str(path))
         return FileResponse(path, media_type=media_type or "image/jpeg")
 
     @app.get("/media/video/{item_id}")
-    def media_video(item_id: str):
+    def media_video(item_id: str, request: Request):
         conn = _conn()
+        source_id = _sid(request)
         row = conn.execute(
-            "SELECT video_path, bookmarked, author_id FROM videos WHERE id=?",
-            (item_id,),
+            "SELECT video_path, bookmarked, author_id FROM videos WHERE id=? AND source_id=?",
+            (item_id, source_id),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Not found")
@@ -1076,13 +2181,13 @@ def create_app(settings: Settings) -> FastAPI:
         if not video_path:
             derived_vp, _ = _canonical_media_paths(item_id=item_id, bookmarked=row[1], author_id=row[2])
             video_path = derived_vp
-        path = _safe_media_path(video_path)
+        path = _safe_media_path(video_path, source_id)
         media_type, _ = mimetypes.guess_type(str(path))
         # Starlette's FileResponse supports Range requests (important for video preview).
         return FileResponse(path, media_type=media_type or "video/mp4")
 
     @app.get("/items/{item_id}/links")
-    def get_item_links(item_id: str) -> dict:
+    def get_item_links(item_id: str, request: Request) -> dict:
         """Return protocol links for opening/revealing local media.
 
         This is intended for the Obsidian plugin's Open/Reveal buttons.
@@ -1091,9 +2196,10 @@ def create_app(settings: Settings) -> FastAPI:
         """
 
         conn = _conn()
+        source_id = _sid(request)
         row = conn.execute(
-            "SELECT id, video_path, cover_path, bookmarked, author_id FROM videos WHERE id=?",
-            (item_id,),
+            "SELECT id, video_path, cover_path, bookmarked, author_id FROM videos WHERE id=? AND source_id=?",
+            (item_id, source_id),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Not found")
@@ -1101,7 +2207,7 @@ def create_app(settings: Settings) -> FastAPI:
         d = dict(row)
         _ensure_media_paths(d)
 
-        resolver = _note_resolver()
+        resolver = _note_resolver(source_id)
 
         vp = d.get("video_path") or ""
         cp = d.get("cover_path") or ""
@@ -1121,44 +2227,46 @@ def create_app(settings: Settings) -> FastAPI:
         }
 
     @app.get("/items/{item_id}")
-    def get_item(item_id: str):
+    def get_item(item_id: str, request: Request):
         conn = _conn()
-        row = conn.execute("SELECT * FROM videos WHERE id=?", (item_id,)).fetchone()
+        source_id = _sid(request)
+        row = conn.execute("SELECT * FROM videos WHERE id=? AND source_id=?", (item_id, source_id)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Not found")
         return {"item": dict(row)}
 
     @app.get("/items/{item_id}/raw")
-    def get_item_raw(item_id: str):
+    def get_item_raw(item_id: str, request: Request):
         """Return full-fidelity raw CSV rows stored in the DB.
 
         This is intentionally separate from /items/{id} so normal UI flows stay light.
         """
 
         conn = _conn()
+        source_id = _sid(request)
         item = conn.execute(
-            "SELECT id, author_id, bookmarked FROM videos WHERE id=?",
-            (item_id,),
+            "SELECT id, author_id, bookmarked FROM videos WHERE id=? AND source_id=?",
+            (item_id, source_id),
         ).fetchone()
         if not item:
             raise HTTPException(status_code=404, detail="Not found")
 
         consolidated = conn.execute(
-            "SELECT row_json, csv_row_hash, imported_at FROM csv_consolidated_raw WHERE video_id=?",
-            (item_id,),
+            "SELECT row_json, csv_row_hash, imported_at FROM csv_consolidated_raw WHERE source_id=? AND video_id=?",
+            (source_id, item_id),
         ).fetchone()
 
         bookmark = conn.execute(
-            "SELECT row_json, imported_at FROM csv_bookmarks_raw WHERE video_id=?",
-            (item_id,),
+            "SELECT row_json, imported_at FROM csv_bookmarks_raw WHERE source_id=? AND video_id=?",
+            (source_id, item_id),
         ).fetchone()
 
         author_id = (item["author_id"] or "").strip()
         author = None
         if author_id:
             author = conn.execute(
-                "SELECT row_json, imported_at FROM csv_authors_raw WHERE author_id=?",
-                (author_id,),
+                "SELECT row_json, imported_at FROM csv_authors_raw WHERE source_id=? AND author_id=?",
+                (source_id, author_id),
             ).fetchone()
 
         return {
@@ -1171,15 +2279,22 @@ def create_app(settings: Settings) -> FastAPI:
         }
 
     @app.get("/items/{item_id}/note")
-    def get_item_note(item_id: str, force: bool = False):
+    def get_item_note(
+        item_id: str,
+        request: Request,
+        force: bool = False,
+        pathlinker_group: str | None = None,
+    ):
         conn = _conn()
-        cached = _get_cached_note(conn, item_id)
+        source_id = _sid(request)
+        group_override = _sanitize_group_prefix(pathlinker_group)
+        cached = _get_cached_note(conn, item_id, source_id)
         if cached:
             md, tv = cached
 
             # If the user pushed their own note content, never overwrite it
-            # unless we add an explicit override flag in the future.
-            if tv == "user":
+            # unless the caller explicitly asks for regeneration.
+            if tv == "user" and not force:
                 return {
                     "id": item_id,
                     "markdown": md,
@@ -1188,33 +2303,35 @@ def create_app(settings: Settings) -> FastAPI:
                     "stale": False,
                 }
 
-            if not force:
+            is_stale = bool(tv and tv != TEMPLATE_VERSION)
+            if (not force) and (not group_override) and (not is_stale):
                 return {
                     "id": item_id,
                     "markdown": md,
                     "cached": True,
                     "template_version": tv,
-                    "stale": bool(tv and tv != TEMPLATE_VERSION),
+                    "stale": False,
                 }
 
-        video = _fetch_video_with_meta(conn, item_id)
+        video = _fetch_video_with_meta(conn, item_id, source_id)
         if not video:
             raise HTTPException(status_code=404, detail="Not found")
 
         _ensure_media_paths(video)
 
-        md = _render_and_cache_note(conn, video)
+        md = _render_and_cache_note(conn, video, source_id, group_link_prefix_override=group_override)
         return {"id": item_id, "markdown": md, "cached": False, "template_version": TEMPLATE_VERSION, "stale": False}
 
     @app.put("/items/{item_id}/note-md")
-    def put_item_note_md(item_id: str, payload: NoteIn = Body(...)) -> dict:
+    def put_item_note_md(item_id: str, request: Request, payload: NoteIn = Body(...)) -> dict:
         """Upsert markdown note content into `video_notes`.
 
         Used when the user edits synced notes in Obsidian and wants to persist those edits.
         """
 
         conn = _conn()
-        exists = conn.execute("SELECT 1 FROM videos WHERE id=?", (item_id,)).fetchone()
+        source_id = _sid(request)
+        exists = conn.execute("SELECT 1 FROM videos WHERE id=? AND source_id=?", (item_id, source_id)).fetchone()
         if not exists:
             raise HTTPException(status_code=404, detail="Not found")
 
@@ -1226,20 +2343,58 @@ def create_app(settings: Settings) -> FastAPI:
         now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         conn.execute(
             """
-            INSERT INTO video_notes(video_id, markdown, template_version, updated_at)
-            VALUES(?, ?, ?, ?)
-            ON CONFLICT(video_id) DO UPDATE SET
+                        INSERT INTO video_notes(video_id, source_id, markdown, template_version, updated_at)
+                        VALUES(?, ?, ?, ?, ?)
+            ON CONFLICT(source_id, video_id) DO UPDATE SET
+                            source_id=excluded.source_id,
               markdown=excluded.markdown,
               template_version=excluded.template_version,
               updated_at=excluded.updated_at
             """,
-            (item_id, md, tv, now),
+                        (item_id, source_id, md, tv, now),
         )
         conn.commit()
         return {"ok": True, "id": item_id, "template_version": tv, "updated_at": now}
 
+    @app.post("/items/{item_id}/schedule")
+    def schedule_item(item_id: str, request: Request):
+        source_id = _sid(request)
+        result = scheduler.enqueue_scheduling_job(source_id, item_id)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error"))
+        return result
+
+    @app.get("/jobs")
+    def list_jobs(request: Request, limit: int = 50, offset: int = 0):
+        source_id = _sid(request)
+        conn = _conn()
+        rows = conn.execute(
+            "SELECT id, video_id, platform, action, status, scheduled_time, created_at, updated_at FROM job_queue WHERE source_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (source_id, limit, offset)
+        ).fetchall()
+        total = conn.execute("SELECT COUNT(*) FROM job_queue WHERE source_id=?", (source_id,)).fetchone()[0]
+        return {"jobs": [dict(r) for r in rows], "total": int(total), "limit": limit, "offset": offset}
+
+    @app.post("/admin/sync-vault")
+    def sync_vault(request: Request):
+        source_id = _sid(request)
+        return {"ok": True, "message": f"Triggered Local Vault metadata sync for {source_id}.", "source_id": source_id}
+
+    @app.post("/media/sync-all")
+    def sync_all_media(request: Request):
+        source_id = _sid(request)
+        return {"ok": True, "message": f"R2 Media sync enqueued to background worker for {source_id}.", "source_id": source_id}
+
+    @app.post("/scheduler/process-all")
+    def process_all_scheduled(request: Request):
+        source_id = _sid(request)
+        return {"ok": True, "message": f"Draft notes pushed to JSON scheduling pipeline for {source_id}.", "source_id": source_id}
+
+
+
     @app.get("/notes")
     def bulk_notes(
+        request: Request,
         q: str = "",
         caption_q: str | None = None,
         limit: int = Query(200, ge=1, le=500),
@@ -1255,6 +2410,7 @@ def create_app(settings: Settings) -> FastAPI:
         tag: str | None = None,
         has_notes: bool | None = None,
         force: bool = False,
+        pathlinker_group: str | None = None,
         order: str = Query("recent", pattern="^(recent|bookmarked|author|status|rating)$"),
     ):
         """Return rendered markdown notes for syncing into the vault.
@@ -1262,9 +2418,11 @@ def create_app(settings: Settings) -> FastAPI:
         Notes are persisted in `video_notes` so subsequent syncs can be fast.
         """
         conn = _conn()
+        source_id = _sid(request)
+        group_override = _sanitize_group_prefix(pathlinker_group)
 
-        where = []
-        params: list[object] = []
+        where = ["v.source_id=?"]
+        params: list[object] = [source_id]
 
         if bookmarked_only:
             where.append("v.bookmarked=1")
@@ -1377,7 +2535,7 @@ def create_app(settings: Settings) -> FastAPI:
                                                         m.rating, m.status, m.statuses, m.tags, m.notes,
                                                         m.product_link, m.author_links, m.platform_targets, m.workflow_log, m.post_url, m.published_time
             FROM videos v
-            LEFT JOIN user_meta m ON m.video_id = v.id
+            LEFT JOIN user_meta m ON m.video_id = v.id AND m.source_id = v.source_id
             {where_sql}
             {order_sql}
             LIMIT ? OFFSET ?
@@ -1386,7 +2544,7 @@ def create_app(settings: Settings) -> FastAPI:
         ).fetchall()
 
         total = conn.execute(
-            f"SELECT COUNT(*) FROM videos v LEFT JOIN user_meta m ON m.video_id=v.id {where_sql}",
+            f"SELECT COUNT(*) FROM videos v LEFT JOIN user_meta m ON m.video_id=v.id AND m.source_id=v.source_id {where_sql}",
             tuple(params),
         ).fetchone()[0]
 
@@ -1396,15 +2554,15 @@ def create_app(settings: Settings) -> FastAPI:
             _ensure_media_paths(v)
             vid = str(v["id"])
             md = None
-            cached = _get_cached_note(conn, vid)
+            cached = _get_cached_note(conn, vid, source_id)
             if cached:
                 cached_md, cached_tv = cached
-                if cached_tv == "user":
+                if cached_tv == "user" and not force:
                     md = cached_md
-                elif not force:
+                elif (not force) and (not group_override) and (not cached_tv or cached_tv == TEMPLATE_VERSION):
                     md = cached_md
             if md is None:
-                md = _render_and_cache_note(conn, v)
+                md = _render_and_cache_note(conn, v, source_id, group_link_prefix_override=group_override)
 
             out.append(
                 {

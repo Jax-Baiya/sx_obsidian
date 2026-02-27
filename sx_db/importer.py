@@ -31,7 +31,14 @@ def _to_int(value: object) -> int | None:
         return None
 
 
-def import_all(conn, consolidated_csv: str, authors_csv: str | None, bookmarks_csv: str | None) -> ImportStats:
+def import_all(
+    conn,
+    consolidated_csv: str,
+    authors_csv: str | None,
+    bookmarks_csv: str | None,
+    *,
+    source_id: str = "default",
+) -> ImportStats:
     # Build author lookup
     authors_by_id: dict[str, dict] = {}
     if authors_csv:
@@ -43,14 +50,15 @@ def import_all(conn, consolidated_csv: str, authors_csv: str | None, bookmarks_c
         # Store full-fidelity author rows
         conn.executemany(
             """
-            INSERT INTO csv_authors_raw(author_id, row_json, imported_at)
-            VALUES(?, ?, ?)
-            ON CONFLICT(author_id) DO UPDATE SET
+                        INSERT INTO csv_authors_raw(source_id, author_id, row_json, imported_at)
+                        VALUES(?, ?, ?, ?)
+                        ON CONFLICT(source_id, author_id) DO UPDATE SET
               row_json=excluded.row_json,
               imported_at=excluded.imported_at
             """,
             [
                 (
+                                        source_id,
                     str(r.get("authors_id")),
                     json.dumps(r, ensure_ascii=False),
                     datetime.utcnow().isoformat(timespec="seconds") + "Z",
@@ -70,14 +78,15 @@ def import_all(conn, consolidated_csv: str, authors_csv: str | None, bookmarks_c
         # Store full-fidelity bookmark rows
         conn.executemany(
             """
-            INSERT INTO csv_bookmarks_raw(video_id, row_json, imported_at)
-            VALUES(?, ?, ?)
-            ON CONFLICT(video_id) DO UPDATE SET
+                        INSERT INTO csv_bookmarks_raw(source_id, video_id, row_json, imported_at)
+                        VALUES(?, ?, ?, ?)
+                        ON CONFLICT(source_id, video_id) DO UPDATE SET
               row_json=excluded.row_json,
               imported_at=excluded.imported_at
             """,
             [
                 (
+                                        source_id,
                     str(r.get("bookmarks_bookmark_id")),
                     json.dumps(r, ensure_ascii=False),
                     datetime.utcnow().isoformat(timespec="seconds") + "Z",
@@ -102,14 +111,15 @@ def import_all(conn, consolidated_csv: str, authors_csv: str | None, bookmarks_c
         # Note: consolidated exports can sometimes contain duplicates; last write wins.
         conn.execute(
             """
-            INSERT INTO csv_consolidated_raw(video_id, row_json, csv_row_hash, imported_at)
-            VALUES(?, ?, ?, ?)
-            ON CONFLICT(video_id) DO UPDATE SET
+                        INSERT INTO csv_consolidated_raw(source_id, video_id, row_json, csv_row_hash, imported_at)
+                        VALUES(?, ?, ?, ?, ?)
+                        ON CONFLICT(source_id, video_id) DO UPDATE SET
               row_json=excluded.row_json,
               csv_row_hash=excluded.csv_row_hash,
               imported_at=excluded.imported_at
             """,
             (
+                                source_id,
                 str(vid),
                 json.dumps(row, ensure_ascii=False),
                 row.get("csv_row_hash") or row.get("source.csv_row_hash") or "",
@@ -151,9 +161,9 @@ def import_all(conn, consolidated_csv: str, authors_csv: str | None, bookmarks_c
               signature,
               is_private
             FROM videos
-            WHERE id=?
+            WHERE source_id=? AND id=?
             """,
-            (vid,),
+            (source_id, vid),
         ).fetchone()
         csv_row_hash = row.get("csv_row_hash") or row.get("source.csv_row_hash") or ""
 
@@ -162,6 +172,7 @@ def import_all(conn, consolidated_csv: str, authors_csv: str | None, bookmarks_c
             csv_row_hash = str(hash(frozenset(row.items())))
 
         payload = {
+            "source_id": source_id,
             "id": str(vid),
             "platform": row.get("platform") or "TikTok",
             "author_id": author_id,
@@ -206,43 +217,56 @@ def import_all(conn, consolidated_csv: str, authors_csv: str | None, bookmarks_c
             if unchanged:
                 stats.skipped += 1
                 continue
-
-        conn.execute(
-            """
-            INSERT INTO videos(
-                            id, platform, author_id, author_unique_id, author_name,
-                            followers, hearts, videos_count, signature, is_private,
-                            caption,
-              bookmarked, bookmark_timestamp, video_path, cover_path, csv_row_hash, updated_at
-            ) VALUES(
-                            :id, :platform, :author_id, :author_unique_id, :author_name,
-                            :followers, :hearts, :videos_count, :signature, :is_private,
-                            :caption,
-              :bookmarked, :bookmark_timestamp, :video_path, :cover_path, :csv_row_hash, :updated_at
-            )
-            ON CONFLICT(id) DO UPDATE SET
-              platform=excluded.platform,
-              author_id=excluded.author_id,
-              author_unique_id=excluded.author_unique_id,
-              author_name=excluded.author_name,
-                            followers=excluded.followers,
-                            hearts=excluded.hearts,
-                            videos_count=excluded.videos_count,
-                            signature=excluded.signature,
-                            is_private=excluded.is_private,
-              caption=excluded.caption,
-              bookmarked=excluded.bookmarked,
-              bookmark_timestamp=excluded.bookmark_timestamp,
-              video_path=excluded.video_path,
-              cover_path=excluded.cover_path,
-              csv_row_hash=excluded.csv_row_hash,
-              updated_at=excluded.updated_at
-            """,
-            payload,
-        )
+        # Idempotent write strategy:
+        # - Existing row: explicit UPDATE only when changed
+        # - Missing row: INSERT with ON CONFLICT DO NOTHING (safe for duplicate inputs/races)
         if existing:
+            conn.execute(
+                """
+                UPDATE videos
+                SET
+                  platform=:platform,
+                  author_id=:author_id,
+                  author_unique_id=:author_unique_id,
+                  author_name=:author_name,
+                  followers=:followers,
+                  hearts=:hearts,
+                  videos_count=:videos_count,
+                  signature=:signature,
+                  is_private=:is_private,
+                  caption=:caption,
+                  bookmarked=:bookmarked,
+                  bookmark_timestamp=:bookmark_timestamp,
+                  video_path=:video_path,
+                  cover_path=:cover_path,
+                  csv_row_hash=:csv_row_hash,
+                  updated_at=:updated_at
+                WHERE source_id=:source_id AND id=:id
+                """,
+                payload,
+            )
             stats.updated += 1
         else:
+            conn.execute(
+                """
+                INSERT INTO videos(
+                  source_id, id, platform, author_id, author_unique_id, author_name,
+                  followers, hearts, videos_count, signature, is_private,
+                  caption,
+                  bookmarked, bookmark_timestamp, video_path, cover_path, csv_row_hash, updated_at
+                ) VALUES(
+                  :source_id, :id, :platform, :author_id, :author_unique_id, :author_name,
+                  :followers, :hearts, :videos_count, :signature, :is_private,
+                  :caption,
+                  :bookmarked, :bookmark_timestamp, :video_path, :cover_path, :csv_row_hash, :updated_at
+                )
+                ON CONFLICT(source_id, id) DO NOTHING
+                """,
+                payload,
+            )
+            # Rowcount is not reliable across sqlite/psycopg adapters for INSERT.
+            # We treat the first-seen path as inserted; duplicate rows in the same
+            # import pass will be handled by the `existing` branch on subsequent loops.
             stats.inserted += 1
 
     conn.commit()

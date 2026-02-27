@@ -16,6 +16,7 @@ pytest==9.0.2
 httpx==0.28.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.1
+psycopg[binary]
 pytz==2025.2
 PyYAML==6.0.3
 six==1.17.0

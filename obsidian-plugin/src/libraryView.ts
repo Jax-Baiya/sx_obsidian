@@ -1628,7 +1628,50 @@ export class LibraryView extends ItemView {
       if (notes.length < limit) break;
     }
 
-    new Notice(`Sync complete: wrote ${written} note(s).`);
+    if (written === 0) {
+      const activeFilters: string[] = [];
+      if (this.q.trim()) activeFilters.push(`search=${this.q.trim()}`);
+      if (this.bookmarkedOnly) activeFilters.push('bookmarked_only=true');
+      if (this.authorFilter.trim()) activeFilters.push(`author=${this.authorFilter.trim()}`);
+      if (this.statusFilters.size) activeFilters.push(`status=${Array.from(this.statusFilters).join(',')}`);
+      if (this.tagFilter.trim()) activeFilters.push(`tag=${this.tagFilter.trim()}`);
+      if (this.captionFilter.trim()) activeFilters.push('caption_q=*');
+      if (this.ratingMin.trim()) activeFilters.push(`rating_min=${this.ratingMin.trim()}`);
+      if (this.ratingMax.trim()) activeFilters.push(`rating_max=${this.ratingMax.trim()}`);
+      if (this.hasNotesOnly) activeFilters.push('has_notes=true');
+
+      if (activeFilters.length) {
+        new Notice(
+          `Sync complete: wrote 0 note(s). Current filters matched no rows (${activeFilters.join(' · ')}). Try Clear or reset Filters.`
+        );
+      } else {
+        try {
+          const probe = await this.apiRequest({
+            path: '/items',
+            query: {
+              q: '',
+              limit: '1',
+              offset: '0',
+              bookmarked_only: 'false',
+              order: 'recent'
+            }
+          });
+          const probeTotal = Number((probe?.json as any)?.total ?? 0);
+          if (probeTotal > 0) {
+            new Notice(
+              'Sync complete: wrote 0 note(s). The source has data, but current selection is empty. Click Clear, then Sync again.'
+            );
+          } else {
+            new Notice('Sync complete: wrote 0 note(s). Source currently has no rows. Re-import data for this source/profile.');
+          }
+        } catch {
+          new Notice('Sync complete: wrote 0 note(s).');
+        }
+      }
+    } else {
+      new Notice(`Sync complete: wrote ${written} note(s).`);
+    }
+
     // refresh current page (optional) so user sees updated counts/status etc.
     void this.refresh();
   }

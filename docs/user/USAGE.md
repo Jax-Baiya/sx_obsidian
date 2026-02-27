@@ -76,6 +76,12 @@ This path is designed to keep Obsidian fast:
 ./.venv/bin/python -m sx_db import-csv
 ```
 
+Source-aware import example:
+
+```bash
+./.venv/bin/python -m sx_db import --source default
+```
+
 3. Run the API:
 
 ```bash
@@ -96,6 +102,14 @@ And for plugin updates:
 export OBSIDIAN_VAULT_PATH=/mnt/t/AlexNova
 ./sxctl.sh plugin update
 ```
+
+Interactive target selection is available in `./sxctl.sh` menu mode.
+You can choose:
+
+- profile index from detected `SRC_PATH_N` / `SRC_PROFILE_N`
+- custom source label/path/id overrides
+- vault override
+- pipeline DB mode (`LOCAL|SESSION|TRANSACTION`) or explicit DB alias
 
 Tip: the `Makefile` wraps the same flow (`make api-init`, `make api-import`, `make api-serve`, `make plugin-build`, `make plugin-install`).
 
@@ -120,6 +134,7 @@ export OBSIDIAN_VAULT_PATH=/mnt/t/AlexNova
 5. In Obsidian:
 
 - Settings → Community plugins → enable **SX Obsidian DB**
+- Settings → SX Obsidian DB → Connection → set/select **Active source ID**
 - Command palette → **SX: Search library**
 - Click a result → it gets pinned to your active notes folder (default `_db/media_active/<id>.md`)
 
@@ -174,9 +189,51 @@ The SQLite subsystem has its own CLI:
 - `python -m sx_db search "query"`
 - `python -m sx_db serve` (starts FastAPI)
 
+Source registry commands:
+
+- `python -m sx_db sources list`
+- `python -m sx_db sources add <id> --label "My Source"`
+- `python -m sx_db sources set-default <id>`
+- `python -m sx_db sources remove <id>`
+
+Source-scoped command options:
+
+- `python -m sx_db status --source <id>`
+- `python -m sx_db find "query" --source <id>`
+- `python -m sx_db import --source <id>`
+- `python -m sx_db export-userdata --source <id>`
+- `python -m sx_db import-userdata --source <id>`
+
 If you prefer a guided interface:
 
 - `python -m sx_db --menu`
+
+## PostgreSQL profile integration (SchedulerX pipeline)
+
+`sx_obsidian` API remains SQLite-based for library serving and plugin features.
+
+However, launch/config now integrates SchedulerX pipeline DB profiles for targeting awareness:
+
+- resolves `SRC_PATH_N_DB_LOCAL|SESSION|TRANSACTION`
+- resolves optional `SQL_DB_PATH_N` (SQL mode)
+- resolves DB aliases like `LOCAL_1`, `SUPABASE_SESSION_1`
+- surfaces redacted PostgreSQL URLs in launcher context and plugin Config tab
+
+### PostgreSQL backend mode (safe workaround)
+
+To avoid breaking plugin contracts, PostgreSQL runtime mode is implemented as a **mirror**:
+
+- set `SX_DB_BACKEND_MODE=POSTGRES_MIRROR`
+- set `SX_PIPELINE_DB_MODE=LOCAL|SESSION|TRANSACTION`
+- API mirrors SchedulerX PostgreSQL rows (`consolidated/authors/bookmarks/media`) into sqlite `videos` for the active source
+- plugin/API endpoints continue using the same sqlite schema and behavior
+
+If you want pure sqlite path selection instead, set:
+
+- `SX_PIPELINE_DB_MODE=SQL`
+- optional `SQL_DB_PATH_N=...` for explicit indexed sqlite DB paths
+
+This gives users one `_N` indexed targeting model across source paths, sqlite DB naming, and pipeline DB profile awareness.
 
 ## Profile management
 

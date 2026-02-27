@@ -36,6 +36,7 @@ Includes:
 No DOM, no Obsidian API.
 
 Current scaffold status:
+
 - A versioned stable export object exists (`libraryCoreApi`, v1.0.0)
 - Host adapter/contracts are defined for future app integration
 
@@ -70,14 +71,14 @@ This layer consumes `library-core` and stays source-of-truth for Obsidian behavi
 ### Current status
 
 - ✅ **Phase 1 (started/completed for first utility slice)** in `sx_obsidian` plugin:
-	- Added shared core helper module: `obsidian-plugin/src/libraryCore.ts`
-	- Moved pure utilities (link parsing/chip labels, URL validation, selection keying, hover-size calculation)
-	- Added pure single-selection transition helpers (column/row/cell/table toggle semantics)
-	- Added pure column-layout helpers (visibility check, order normalization, width sanitization)
-	- Unified workflow status semantics into shared core (single source of truth for status lists/ranking)
-	- Added shared tag normalization helpers used by SX Library vault/frontmatter sync paths
-	- `libraryView.ts` now consumes these helpers through compatibility wrappers
-	- Behavior preserved to avoid destabilizing current project
+  - Added shared core helper module: `obsidian-plugin/src/libraryCore.ts`
+  - Moved pure utilities (link parsing/chip labels, URL validation, selection keying, hover-size calculation)
+  - Added pure single-selection transition helpers (column/row/cell/table toggle semantics)
+  - Added pure column-layout helpers (visibility check, order normalization, width sanitization)
+  - Unified workflow status semantics into shared core (single source of truth for status lists/ranking)
+  - Added shared tag normalization helpers used by SX Library vault/frontmatter sync paths
+  - `libraryView.ts` now consumes these helpers through compatibility wrappers
+  - Behavior preserved to avoid destabilizing current project
 
 ### Phase 1 (low risk, immediate)
 
@@ -151,3 +152,5 @@ while providing a project-specific backend adapter.
 ## Recommendation
 
 Yes — we should do this. The safest next step is **Phase 1 extraction of pure utilities** into a shared `library-core` module while keeping current plugin behavior intact.
+
+See also: [`PLUGIN_SCALABILITY_ARCHITECTURE.md`](PLUGIN_SCALABILITY_ARCHITECTURE.md) for the in-repo no-break modularization plan.

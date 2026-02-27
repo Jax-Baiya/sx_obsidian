@@ -1,0 +1,26 @@
+{
+  "product": {
+    "brandName": "sx_obsidian",
+    "oneLinePurpose": "A cinematic operator console that turns Obsidian notes into scheduled, publish-ready social content—without breaking your vault truth."
+  },
+  "aestheticPreset": "A",
+  "hostingTarget": "vercel",
+  "profiles": ["profile_1", "profile_2", "profile_3"],
+  "platforms": ["pinterest"],
+  "libraryRules": {
+    "statusTriggersArtifact": "scheduling",
+    "artifactBasenameMatchesMd": true,
+    "persistToLocalAndCloud": true
+  },
+  "r2": {
+    "requiredOnScheduling": true,
+    "yamlField": "R2_media_url"
+  },
+  "navigation": {
+    "landing": ["Overview", "Features", "Manifesto", "Protocol", "CTA"],
+    "console": ["Dashboard", "Library", "Scheduling", "Queue", "Item Review", "Settings"]
+  },
+  "mvp": {
+    "firstAction": "When a note becomes scheduling: create JSON artifact in both DBs, upload media to R2, write back R2 URL, then allow Publish Now or Schedule Later from web."
+  }
+}

@@ -1,6 +1,12 @@
 # API Architecture: Plugin ↔ Database Interaction
 
-This document explains how the **Obsidian plugin** communicates with the **SQLite database** through the **FastAPI server**.
+This document explains how the **Obsidian plugin** communicates with the data backend through the **FastAPI server**.
+
+Runtime backends:
+
+- `SQLITE` (legacy/default)
+- `POSTGRES_MIRROR` (transitional compatibility, deprecated)
+- `POSTGRES_PRIMARY` (target architecture: one schema per source profile)
 
 ---
 
@@ -29,8 +35,13 @@ This document explains how the **Obsidian plugin** communicates with the **SQLit
 ├─────────────────────────────────────────────────────────────────┤
 │  Endpoints:                                                     │
 │  • GET /           → API info + endpoint list                   │
-│  • GET /health     → {"ok": true}                               │
+│  • GET /health     → {"ok": true, "source_id": "..."}         │
 │  • GET /stats      → item counts, FTS status                    │
+│  • GET /sources    → source registry + default source           │
+│  • POST /sources   → create/upsert source                       │
+│  • PATCH /sources/{id} → update source metadata                 │
+│  • POST /sources/{id}/activate → set default source             │
+│  • DELETE /sources/{id} → remove empty non-default source       │
 │  • GET /search     → FTS5 + LIKE fallback search                │
 │  • GET /authors    → author aggregation + filters               │
 │  • GET /items       → paged list for table/grid UI              │
@@ -75,6 +86,11 @@ PLUGIN                     API                        DATABASE
   │ {results: [...]}        │                            │
 ```
 
+All data endpoints are source-scoped.
+
+- Source is resolved from: `X-SX-Source-ID` header → `source_id` query param → backend default source.
+- The API echoes active scope via response header: `X-SX-Source-ID`.
+
 **Search Logic** (`sx_db/search.py`):
 
 1. If query is empty → return all items sorted by `bookmarked DESC, updated_at DESC`
@@ -116,19 +132,24 @@ PLUGIN                     API                        DATABASE
 
 ## API Endpoints Reference
 
-| Endpoint            | Method | Purpose                   | Returns                                |
-| ------------------- | ------ | ------------------------- | -------------------------------------- |
-| `/`                 | GET    | API info                  | Endpoint list                          |
-| `/health`           | GET    | Health check              | `{"ok": true}`                         |
-| `/stats`            | GET    | Database statistics       | Item counts, FTS status                |
-| `/search`           | GET    | Search library (modal)    | `{results: [...], limit, offset}`      |
-| `/items`            | GET    | Paged items list (table)  | `{items: [...], limit, offset, total}` |
-| `/items/{id}`       | GET    | Get item details          | `{item: {...}}`                        |
-| `/items/{id}/note`  | GET    | Get markdown note         | `{id, markdown}`                       |
-| `/items/{id}/meta`  | GET    | Get user meta             | `{meta: {...}}`                        |
-| `/items/{id}/meta`  | PUT    | Upsert user meta          | `{meta: {...}}`                        |
-| `/media/cover/{id}` | GET    | Thumbnail/cover bytes     | Image bytes                            |
-| `/media/video/{id}` | GET    | Video bytes (Range-ready) | Video bytes                            |
+| Endpoint                 | Method | Purpose                   | Returns                                |
+| ------------------------ | ------ | ------------------------- | -------------------------------------- |
+| `/`                      | GET    | API info                  | Endpoint list                          |
+| `/health`                | GET    | Health check              | `{"ok": true, "source_id": "..."}`     |
+| `/stats`                 | GET    | Database statistics       | Item counts, FTS status                |
+| `/sources`               | GET    | List source registry      | `{sources: [...], default_source_id}`  |
+| `/sources`               | POST   | Create/upsert source      | `{ok, source_id}`                      |
+| `/sources/{id}`          | PATCH  | Update source metadata    | `{ok, source_id}`                      |
+| `/sources/{id}/activate` | POST   | Set default source        | `{ok, default_source_id}`              |
+| `/sources/{id}`          | DELETE | Delete source (guarded)   | `{ok, deleted}`                        |
+| `/search`                | GET    | Search library (modal)    | `{results: [...], limit, offset}`      |
+| `/items`                 | GET    | Paged items list (table)  | `{items: [...], limit, offset, total}` |
+| `/items/{id}`            | GET    | Get item details          | `{item: {...}}`                        |
+| `/items/{id}/note`       | GET    | Get markdown note         | `{id, markdown}`                       |
+| `/items/{id}/meta`       | GET    | Get user meta             | `{meta: {...}}`                        |
+| `/items/{id}/meta`       | PUT    | Upsert user meta          | `{meta: {...}}`                        |
+| `/media/cover/{id}`      | GET    | Thumbnail/cover bytes     | Image bytes                            |
+| `/media/video/{id}`      | GET    | Video bytes (Range-ready) | Video bytes                            |
 
 ### Query Parameters
 
@@ -137,6 +158,7 @@ PLUGIN                     API                        DATABASE
 - `q` (string): Search query
 - `limit` (int, default 50): Max results
 - `offset` (int, default 0): Pagination offset
+- `source_id` (string, optional): Source scope override
 
 **`/items`:**
 
@@ -153,6 +175,7 @@ PLUGIN                     API                        DATABASE
 - `tag` (csv list): Filter by tags (comma-separated tags stored in user meta)
 - `has_notes` (bool): Filter by whether user notes exist
 - `order` (`recent|bookmarked|author|status|rating`): Sort order
+- `source_id` (string, optional): Source scope override
 
 ### `caption_q` advanced syntax
 

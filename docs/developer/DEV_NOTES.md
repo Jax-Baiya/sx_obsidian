@@ -1,25 +1,32 @@
 # DEVELOPER NOTES
 
 ## Architecture
+
 The system consists of a Python package (`sx/`) with an entrypoint at `sx/__main__.py` (run via `python -m sx` or `./run.sh`).
 
 At a high level it performs an ETL (Extract, Transform, Load) pipeline:
+
 1.  **Extract**: Reads CSVs and scans the file system.
 2.  **Transform**: Joins datasets using Pandas-like logic (dictionary lookups) and calculates a row hash for change detection.
 3.  **Load**: Uses recursive directory creation and atomic-like writes to generate Markdown files.
 
 ## Extending the Schema
+
 To add new metadata fields:
+
 1.  Add the CSV column name mapping to `schema.yaml`.
 2.  Update the frontmatter rendering logic in `sx/render/render.py` to include the new field.
 
 ## Idempotency Logic
+
 We use a MurmurHash-like approach (MD5 of stable key-value pairs) stored in the `source.csv_row_hash` field. If the newly calculated hash matches the one in the existing file, the file is skipped. This drastically improves performance for large vaults (thousands of files).
 
 ## Media Discovery
+
 The recursive scan is depth-first. It extracts all numbers from a filename to find the ID. While simple, it is robust against suffixes and varying folder structures.
 
 ## Windows/WSL Metadata Cleanup
+
 The `deploy.sh` script automatically removes Windows `:Zone.Identifier` files which can sometimes cause permission or path processing issues in WSL. This is a standard cleanup step for cross-filesystem environments.
 
 ## Future Updates Itinerary (Pending)
@@ -27,8 +34,27 @@ The `deploy.sh` script automatically removes Windows `:Zone.Identifier` files wh
 The following features are intentionally deferred and tracked for future iterations:
 
 - **Event-based API log pruning policy** (beyond current daily rotation + retention), such as:
-	- prune logs after sustained healthy uptime,
-	- keep error-day logs longer than normal days,
-	- prune immediately after successful diagnostics export.
+  - prune logs after sustained healthy uptime,
+  - keep error-day logs longer than normal days,
+  - prune immediately after successful diagnostics export.
 - **Additional link interaction UX refinements**, including optional per-field copy/open behavior profiles.
 - **Further Active-only migration hardening**, including optional stricter legacy-folder warnings and guided cleanup steps.
+
+## 2026-02 Notes: API/TUI + Plugin Hygiene
+
+- **TUI API screen health inspector**
+  - API control now includes a **View health payload** action when a server is running.
+  - It renders a compact summary (`ok`, `source_id`, backend/schema/search_path) and supports an optional raw JSON view.
+
+- **PathLinker local override in plugin**
+  - Added plugin setting: `localPathlinkerGroup1` (UI label: **Local PathLinker group (PATHLINKER_GROUP_1)**).
+  - Plugin passes this as `pathlinker_group` for note-generation endpoints (`/items/{id}/note`, `/notes`).
+  - Backend treats this as an **ephemeral render override** and does **not** overwrite shared DB note cache.
+
+- **Force-regenerate behavior alignment**
+  - Library selection sync now respects `fetchForceRegenerate` instead of always forcing regeneration.
+  - This makes sync behavior consistent with Data Flow fetch settings and safer for iterative workflows.
+
+- **Stricter default hygiene**
+  - Default for `autoPushLegacyFoldersInActiveOnly` changed to `false` for new installs.
+  - In Active-only strategy, edits in legacy folders are no longer auto-pushed unless explicitly enabled.

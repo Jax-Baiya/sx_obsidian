@@ -61,6 +61,7 @@ Tooling:
 - **Fast local search** (search modal) and a **paged library table** (table view)
 - **Pin items into the vault** as Markdown notes (active working set)
 - **User-owned metadata** persisted in SQLite (rating/status/tags/notes, etc.)
+- **Multi-source library isolation** (same IDs can exist in different sources)
 - **Sync workflows**:
     - DB → vault (fetch/pin notes)
     - vault → DB (push edits back)
@@ -75,6 +76,57 @@ Tooling:
 - Edit metadata fields and keep those edits stable across CSV re-imports
 - Preview media (cover/video) when paths exist and API can access them
 - Keep their vault fast by storing the full dataset in SQLite rather than files
+
+## Multi-source support
+
+The system now supports multiple isolated sources in one SQLite DB.
+
+- Every API request is scoped by `source_id`
+- The plugin sends source context automatically (`X-SX-Source-ID` + query fallback)
+- Backend can maintain a registry of sources and a default source
+- Duplicate item IDs are allowed across different sources
+
+### Plugin source selection
+
+In **Settings → Connection**:
+
+- set **Active source ID** manually, or
+- use **Source registry** controls to list/add/delete sources and set backend default.
+
+In **Settings → Config**:
+
+- choose launch profile index (`_N`)
+- set SchedulerX env path and sqlite DB naming template
+- choose pipeline DB mode/alias awareness (`LOCAL`/`SESSION`/`TRANSACTION`/`SQL`)
+- load SchedulerX profiles from backend and apply to launcher config
+
+Runtime backend mode can also be configured via `.env`:
+
+- `SX_DB_BACKEND_MODE=SQLITE` (default)
+- `SX_DB_BACKEND_MODE=POSTGRES_MIRROR` (safe workaround that mirrors selected PostgreSQL profile data into sqlite-compatible tables so plugin behavior stays unchanged)
+
+### API source endpoints
+
+- `GET /sources`
+- `POST /sources`
+- `PATCH /sources/{source_id}`
+- `POST /sources/{source_id}/activate`
+- `DELETE /sources/{source_id}`
+
+### CLI source commands
+
+- `python -m sx_db sources list`
+- `python -m sx_db sources add <id> --label "..."`
+- `python -m sx_db sources set-default <id>`
+- `python -m sx_db sources remove <id>`
+
+Source-scoped options are also available on key commands:
+
+- `python -m sx_db status --source <id>`
+- `python -m sx_db find "query" --source <id>`
+- `python -m sx_db import --source <id>`
+- `python -m sx_db export-userdata --source <id>`
+- `python -m sx_db import-userdata --source <id>`
 
 ## Commands / keyboard shortcuts
 
@@ -96,6 +148,7 @@ Available commands (from `obsidian-plugin/src/main.ts`):
 - `SX: Open plugin settings`
 - Settings deep-links:
     - `SX: Open settings → Connection tab`
+    - `SX: Open settings → Config tab`
     - `SX: Open settings → Sync tab`
     - `SX: Open settings → Fetch tab`
     - `SX: Open settings → Backend tab`
@@ -212,6 +265,7 @@ Start here: **[`docs/README.md`](docs/README.md)**
 Most-used:
 
 - [Usage Guide](docs/USAGE.md)
+- [sxctl CLI guide](docs/cli.md)
 - [SQLite + Plugin workflow](docs/PLUGIN_DB.md)
 - [API architecture](docs/API_ARCHITECTURE.md)
 - [Performance & large vault safety](docs/PERFORMANCE.md)

@@ -16,6 +16,9 @@ Instead:
 - `make api-init`
 - `make api-import`
 
+Optional (multi-source): import into a specific source id:
+- `./.venv/bin/python -m sx_db import --source default`
+
 By default, `import-csv` reads these from `.env`:
 - `CSV_consolidated_1`
 - `CSV_authors_1`
@@ -46,11 +49,22 @@ Enable the plugin in Obsidian:
 Settings → Community plugins → SX Obsidian DB:
 
 - API base URL
+- Active source ID (or choose from Source registry)
 - Active notes folder
 - Search limit + debounce
 - Bookmarked-only filter
 - Open note after pin
 - Test connection (calls `/health` + `/stats`)
+
+### Source registry (Connection tab)
+
+You can manage sources directly from plugin settings:
+
+- list/reload backend sources
+- add a new source id
+- set plugin active source
+- set backend default source
+- delete empty non-default sources
 
 ## Notes
 

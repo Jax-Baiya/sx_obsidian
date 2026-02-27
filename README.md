@@ -52,8 +52,8 @@ SX Obsidian keeps your vault fast by storing the heavy dataset in the database l
 
 ### Featured snapshots
 
-| Milestone                        | Screenshot                                          |
-| -------------------------------- | --------------------------------------------------- |
+| Milestone                        | Screenshot                                               |
+| -------------------------------- | -------------------------------------------------------- |
 | UI/Theme polish                  | ![Screenshot 03](docs/assets/showcase/screenshot-03.png) |
 | Library interaction improvements | ![Screenshot 08](docs/assets/showcase/screenshot-08.png) |
 | Data/flow visual validation      | ![Screenshot 12](docs/assets/showcase/screenshot-12.png) |

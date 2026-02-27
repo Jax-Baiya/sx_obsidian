@@ -1,10 +1,23 @@
 #!/usr/bin/env bats
 
-REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME}")/../.." && pwd)"
-CONTEXT_FILE="$REPO_ROOT/.sxctl/context.env"
-CONTEXT_JSON="$REPO_ROOT/.sxctl/context.json"
+REPO_ROOT=""
+CONTEXT_FILE=""
+CONTEXT_JSON=""
 
 setup() {
+  if [ -z "$REPO_ROOT" ]; then
+    local test_dir="${BATS_TEST_DIRNAME:-}"
+    if [ -z "$test_dir" ] && [ -n "${BATS_TEST_FILENAME:-}" ]; then
+      test_dir="$(cd "$(dirname "${BATS_TEST_FILENAME}")" && pwd)"
+    fi
+    if [ -z "$test_dir" ]; then
+      test_dir="$(cd "$(dirname "$0")" && pwd)"
+    fi
+    REPO_ROOT="$(cd "$test_dir/../.." && pwd)"
+    CONTEXT_FILE="$REPO_ROOT/.sxctl/context.env"
+    CONTEXT_JSON="$REPO_ROOT/.sxctl/context.json"
+  fi
+
   mkdir -p "$REPO_ROOT/.sxctl"
   mkdir -p "$REPO_ROOT/_logs"
 

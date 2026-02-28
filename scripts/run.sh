@@ -9,59 +9,59 @@ cd "$ROOT_DIR"
 VENV_DIR=".venv"
 
 print_venv_diagnostics() {
-    echo "--- SX venv diagnostics ---" >&2
-    echo "CWD: $(pwd)" >&2
-    echo "VENV_DIR: $VENV_DIR" >&2
+  echo "--- SX venv diagnostics ---" >&2
+  echo "CWD: $(pwd)" >&2
+  echo "VENV_DIR: $VENV_DIR" >&2
 
-    if [ -d "$VENV_DIR" ]; then
-        echo "Contents: $VENV_DIR/bin" >&2
-        find "$VENV_DIR/bin" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sed -n '1,120p' >&2 || true
+  if [ -d "$VENV_DIR" ]; then
+    echo "Contents: $VENV_DIR/bin" >&2
+    find "$VENV_DIR/bin" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sed -n '1,120p' >&2 || true
 
-        if [ -f "$VENV_DIR/pyvenv.cfg" ]; then
-            printf '\n%s\n' "$VENV_DIR/pyvenv.cfg:" >&2
-            sed -n '1,120p' "$VENV_DIR/pyvenv.cfg" >&2 || true
+    if [ -f "$VENV_DIR/pyvenv.cfg" ]; then
+      printf '\n%s\n' "$VENV_DIR/pyvenv.cfg:" >&2
+      sed -n '1,120p' "$VENV_DIR/pyvenv.cfg" >&2 || true
     fi
-    else
-        echo "(missing) $VENV_DIR" >&2
-    fi
+  else
+    echo "(missing) $VENV_DIR" >&2
+  fi
 
-    printf '\n%s\n' "Fix: rm -rf $VENV_DIR && ./scripts/deploy.sh" >&2
+  printf '\n%s\n' "Fix: rm -rf $VENV_DIR && ./scripts/deploy.sh" >&2
 }
 
 if [ ! -d "$VENV_DIR" ]; then
-    echo "Virtual environment not found; bootstrapping via ./scripts/deploy.sh..." >&2
-    ./scripts/deploy.sh
+  echo "Virtual environment not found; bootstrapping via ./scripts/deploy.sh..." >&2
+  ./scripts/deploy.sh
 fi
 
 # Prefer python3, fall back to python.
 PY="$VENV_DIR/bin/python3"
 if [ -x "$PY" ]; then
-    :
+  :
 elif [ -L "$PY" ] && [ ! -e "$PY" ]; then
+  echo "Error: $PY is a broken symlink." >&2
+  print_venv_diagnostics
+  exit 1
+else
+  PY="$VENV_DIR/bin/python"
+  if [ -x "$PY" ]; then
+    :
+  elif [ -L "$PY" ] && [ ! -e "$PY" ]; then
     echo "Error: $PY is a broken symlink." >&2
     print_venv_diagnostics
     exit 1
-else
-    PY="$VENV_DIR/bin/python"
-    if [ -x "$PY" ]; then
-        :
-    elif [ -L "$PY" ] && [ ! -e "$PY" ]; then
-        echo "Error: $PY is a broken symlink." >&2
-        print_venv_diagnostics
-        exit 1
-    else
-        echo "Error: Could not find an executable Python interpreter in $VENV_DIR/bin" >&2
-        echo "Tried: $VENV_DIR/bin/python3, $VENV_DIR/bin/python" >&2
-        print_venv_diagnostics
-        exit 1
-    fi
+  else
+    echo "Error: Could not find an executable Python interpreter in $VENV_DIR/bin" >&2
+    echo "Tried: $VENV_DIR/bin/python3, $VENV_DIR/bin/python" >&2
+    print_venv_diagnostics
+    exit 1
+  fi
 fi
 
 # Print SX System Info
 if [[ "$*" == *"--help"* ]]; then
-    echo "SX Obsidian Media Control - Senior Edition"
-    echo "Documentation: docs/ENVIRONMENT.md, docs/PROFILES.md, docs/SCHEMA_GUIDE.md"
-    echo "-------------------------------------------"
+  echo "SX Obsidian Media Control - Senior Edition"
+  echo "Documentation: docs/ENVIRONMENT.md, docs/PROFILES.md, docs/SCHEMA_GUIDE.md"
+  echo "-------------------------------------------"
 fi
 
 # Execute the generator via the package entrypoint.

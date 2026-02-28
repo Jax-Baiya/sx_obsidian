@@ -37,10 +37,10 @@ find . -name "*:Zone.Identifier" -delete 2>/dev/null || true
 # 3. Venv Setup
 VENV_DIR=".venv"
 if [ ! -d "$VENV_DIR" ]; then
-    echo "Creating virtual environment in $VENV_DIR..."
-    "$PYTHON_BIN" -m venv "$VENV_DIR"
+  echo "Creating virtual environment in $VENV_DIR..."
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
 else
-    echo "Virtual environment already exists."
+  echo "Virtual environment already exists."
 fi
 
 # 3. Install Dependencies
@@ -49,19 +49,19 @@ echo "Installing dependencies..."
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
 
 if [ -f "requirements.txt" ]; then
-    "$VENV_DIR/bin/python" -m pip install -r requirements.txt
+  "$VENV_DIR/bin/python" -m pip install -r requirements.txt
 else
-    # Backward-compatible fallback
-    "$VENV_DIR/bin/python" -m pip install pandas pyyaml tqdm python-dotenv
+  # Backward-compatible fallback
+  "$VENV_DIR/bin/python" -m pip install pandas pyyaml tqdm python-dotenv
 fi
 
 if [ "$INSTALL_DEV" -eq 1 ]; then
-    if [ -f "requirements-dev.txt" ]; then
-        echo "Installing dev dependencies (requirements-dev.txt)..."
-        "$VENV_DIR/bin/python" -m pip install -r requirements-dev.txt
-    else
-        echo "Warning: --dev requested but requirements-dev.txt not found; skipping dev deps." >&2
-    fi
+  if [ -f "requirements-dev.txt" ]; then
+    echo "Installing dev dependencies (requirements-dev.txt)..."
+    "$VENV_DIR/bin/python" -m pip install -r requirements-dev.txt
+  else
+    echo "Warning: --dev requested but requirements-dev.txt not found; skipping dev deps." >&2
+  fi
 fi
 
 echo "--- Deployment Complete ---"

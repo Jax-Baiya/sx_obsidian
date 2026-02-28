@@ -90,6 +90,11 @@ SX Obsidian keeps your vault fast by storing the heavy dataset in the database l
 
 ## Quickstart
 
+Prefer a guided, OS-specific setup?
+
+- Start here: [`docs/user/SETUP_AND_LAUNCH.md`](docs/user/SETUP_AND_LAUNCH.md)
+- Includes Windows (WSL/native notes), Linux, and macOS launch workflows.
+
 ### 1) Bootstrap
 
 ```bash

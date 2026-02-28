@@ -20,8 +20,14 @@ for arg in "$@"; do
 done
 
 # 1. Environment Check
-if ! command -v python3 &> /dev/null; then
-    echo "Error: python3 is not installed. Please install it (e.g., sudo apt install python3-venv)"
+PYTHON_BIN=""
+if command -v python &> /dev/null; then
+    PYTHON_BIN="python"
+elif command -v python3 &> /dev/null; then
+    PYTHON_BIN="python3"
+else
+    echo "Error: Python is not installed or not on PATH." >&2
+    echo "In GitHub Actions, ensure actions/setup-python ran successfully." >&2
     exit 1
 fi
 
@@ -33,7 +39,7 @@ find . -name "*:Zone.Identifier" -delete 2>/dev/null || true
 VENV_DIR=".venv"
 if [ ! -d "$VENV_DIR" ]; then
     echo "Creating virtual environment in $VENV_DIR..."
-    python3 -m venv "$VENV_DIR"
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
 else
     echo "Virtual environment already exists."
 fi
@@ -41,19 +47,19 @@ fi
 # 3. Install Dependencies
 echo "Installing dependencies..."
 # Using the full path to the venv python to ensure it installs in the right place
-"$VENV_DIR/bin/python3" -m pip install --upgrade pip
+"$VENV_DIR/bin/python" -m pip install --upgrade pip
 
 if [ -f "requirements.txt" ]; then
-    "$VENV_DIR/bin/python3" -m pip install -r requirements.txt
+    "$VENV_DIR/bin/python" -m pip install -r requirements.txt
 else
     # Backward-compatible fallback
-    "$VENV_DIR/bin/python3" -m pip install pandas pyyaml tqdm python-dotenv
+    "$VENV_DIR/bin/python" -m pip install pandas pyyaml tqdm python-dotenv
 fi
 
 if [ "$INSTALL_DEV" -eq 1 ]; then
     if [ -f "requirements-dev.txt" ]; then
         echo "Installing dev dependencies (requirements-dev.txt)..."
-        "$VENV_DIR/bin/python3" -m pip install -r requirements-dev.txt
+        "$VENV_DIR/bin/python" -m pip install -r requirements-dev.txt
     else
         echo "Warning: --dev requested but requirements-dev.txt not found; skipping dev deps." >&2
     fi

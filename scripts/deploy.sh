@@ -10,12 +10,12 @@ echo "--- SX Generator Deployment ---"
 
 INSTALL_DEV=0
 for arg in "$@"; do
-    case "$arg" in
-        --dev | --with-dev)
-            INSTALL_DEV=1
-            ;;
-        *) ;;
-    esac
+  case "$arg" in
+    --dev | --with-dev)
+      INSTALL_DEV=1
+      ;;
+    *) ;;
+  esac
 done
 
 # 1. Environment Check

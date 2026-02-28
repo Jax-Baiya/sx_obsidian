@@ -11,19 +11,18 @@ echo "--- SX Generator Deployment ---"
 INSTALL_DEV=0
 for arg in "$@"; do
     case "$arg" in
-        --dev|--with-dev)
+        --dev | --with-dev)
             INSTALL_DEV=1
             ;;
-        *)
-            ;;
+        *) ;;
     esac
 done
 
 # 1. Environment Check
 PYTHON_BIN=""
-if command -v python &> /dev/null; then
+if command -v python &>/dev/null; then
   PYTHON_BIN="python"
-elif command -v python3 &> /dev/null; then
+elif command -v python3 &>/dev/null; then
   PYTHON_BIN="python3"
 else
   echo "Error: Python is not installed or not on PATH." >&2

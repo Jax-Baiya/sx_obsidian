@@ -73,7 +73,7 @@ sx_pa_load_env_file() {
 
       export "$key=$val"
     fi
-  done < "$f"
+  done <"$f"
 }
 
 sx_pa_val() {
@@ -318,7 +318,7 @@ sx_pa_ctx_init() {
   # Resolve optional pipeline PostgreSQL profile mapping for this source profile.
   local aliases local_alias session_alias trans_alias
   aliases="$(sx_pa_profile_db_aliases_by_index "$idx")"
-  IFS='|' read -r local_alias session_alias trans_alias <<< "$aliases"
+  IFS='|' read -r local_alias session_alias trans_alias <<<"$aliases"
 
   local sql_db_path
   sql_db_path="$(sx_pa_profile_sql_db_path_by_index "$idx")"
@@ -330,9 +330,9 @@ sx_pa_ctx_init() {
 
   if [ -z "$selected_alias" ]; then
     case "$mode" in
-      SQL|SQLITE) selected_alias="" ;;
+      SQL | SQLITE) selected_alias="" ;;
       SESSION) selected_alias="$session_alias" ;;
-      TRANS|TRANSACTION) selected_alias="$trans_alias" ;;
+      TRANS | TRANSACTION) selected_alias="$trans_alias" ;;
       *) selected_alias="$local_alias" ;;
     esac
   fi

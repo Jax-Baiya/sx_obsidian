@@ -1363,10 +1363,10 @@ case "$cmd" in
     sx_profile_apply
 
     case "$sub" in
-      serve|run|server)
+      serve | run | server)
         action_start_api
         ;;
-      serve-bg|bg|background)
+      serve-bg | bg | background)
         sx_profile_print_context "api serve-bg"
         mkdir -p "./_logs"
         pidfile="./_logs/sx_db_api.pid"
@@ -1424,7 +1424,7 @@ case "$cmd" in
       import)
         action_import_csv
         ;;
-      status|stats)
+      status | stats)
         sx_profile_print_context "api status"
         ./.venv/bin/python -m sx_db status
         ;;

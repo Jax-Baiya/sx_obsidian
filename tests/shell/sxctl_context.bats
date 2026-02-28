@@ -150,14 +150,7 @@ teardown() {
   run bash -lc "test -f '$CONTEXT_JSON'"
   [ "$status" -eq 0 ]
 
-  run bash -lc "python - <<'PY'
-import json
-f='${CONTEXT_JSON}'
-d=json.load(open(f,"r",encoding="utf-8"))
-assert str(d.get("SXCTL_PROFILE_INDEX"))=="1"
-assert str(d.get("SXCTL_DB_BACKEND"))=="sqlite"
-print("ok")
-PY"
+  run env CONTEXT_JSON_PATH="$CONTEXT_JSON" bash -lc "python3 -c 'import json, os; d = json.load(open(os.environ["'"'CONTEXT_JSON_PATH'"'"], "'"'r'"'", encoding="'"'utf-8'"'")); assert str(d.get("'"'SXCTL_PROFILE_INDEX'"'")) == "'"'1'"'"; assert str(d.get("'"'SXCTL_DB_BACKEND'"'")) == "'"'sqlite'"'"; print("'"'ok'"'" )'"
   [ "$status" -eq 0 ]
   [[ "$output" == *"ok"* ]]
 }

@@ -22,16 +22,20 @@ def test_default_checked_prefers_active_profile_indices() -> None:
     assert checked == {"/mnt/t/YuZhou"}
 
 
-def test_default_checked_falls_back_to_profile_roots() -> None:
+def test_default_checked_falls_back_to_profile_roots(tmp_path: Path) -> None:
+    alex = tmp_path / "AlexNova"
+    yuzhou = tmp_path / "YuZhou"
+    alex.mkdir(parents=True, exist_ok=True)
+    yuzhou.mkdir(parents=True, exist_ok=True)
+
     all_paths = {
-        "/mnt/t/AlexNova": "/mnt/t/AlexNova  [no .obsidian]",
-        "/mnt/t/YuZhou": "/mnt/t/YuZhou  [✓ .obsidian]",
+        str(alex): f"{alex}  [no .obsidian]",
+        str(yuzhou): f"{yuzhou}  [✓ .obsidian]",
     }
-    profiles = [_profile(1, "/mnt/t/AlexNova"), _profile(2, "/mnt/t/YuZhou")]
+    profiles = [_profile(1, str(alex)), _profile(2, str(yuzhou))]
 
     checked = _default_checked_vault_paths(all_paths, profiles, None)
-    assert "/mnt/t/AlexNova" in checked
-    assert "/mnt/t/YuZhou" in checked
+    assert checked == {str(alex), str(yuzhou)}
 
 
 def test_default_checked_uses_obsidian_hint_when_profiles_missing() -> None:

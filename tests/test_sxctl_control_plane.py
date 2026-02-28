@@ -77,6 +77,12 @@ def test_postgres_primary_is_default_backend_and_context_fields(tmp_path: Path):
             "SXCTL_NONINTERACTIVE": "1",
             "SXCTL_PROFILE_INDEX": "2",
             "SXCTL_VAULT_ROOT": str(vault),
+            "SXCTL_DB_PROFILE": "LOCAL_2",
+            "LOCAL_2_DB_USER": "test",
+            "LOCAL_2_DB_PASSWORD": "test",
+            "LOCAL_2_DB_HOST": "localhost",
+            "LOCAL_2_DB_PORT": "5432",
+            "LOCAL_2_DB_NAME": "sx_obsidian_test",
         },
     )
     assert proc.returncode == 0, proc.stderr
@@ -149,6 +155,7 @@ def test_menu_ctx_cancel_returns_to_main_menu(tmp_path: Path):
             "SXCTL_NONINTERACTIVE": "1",
             "SXCTL_PROFILE_INDEX": "2",
             "SXCTL_VAULT_ROOT": str(vault),
+            "SXCTL_DB_BACKEND": "sqlite",
         },
     )
     assert init_proc.returncode == 0, init_proc.stderr

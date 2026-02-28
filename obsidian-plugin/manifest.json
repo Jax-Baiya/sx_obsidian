@@ -1,7 +1,7 @@
 {
   "id": "sx-obsidian-db",
   "name": "SX Obsidian DB",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "minAppVersion": "1.5.0",
   "description": "Search SX SQLite library and pin items into an active notes folder.",
   "author": "Jax Baiya",

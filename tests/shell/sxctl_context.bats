@@ -100,6 +100,11 @@ teardown() {
     SXCTL_VAULT_ROOT="$TEST_VAULT" \
     SXCTL_DB_BACKEND=postgres \
     SXCTL_DB_PROFILE=LOCAL_3 \
+    LOCAL_3_DB_USER=test \
+    LOCAL_3_DB_PASSWORD=test \
+    LOCAL_3_DB_HOST=localhost \
+    LOCAL_3_DB_PORT=5432 \
+    LOCAL_3_DB_NAME=sx_obsidian_test \
     bash -lc "cd '$REPO_ROOT' && ./scripts/sxctl.sh context init"
 
   [ "$status" -eq 0 ]
@@ -145,7 +150,7 @@ teardown() {
   run bash -lc "test -f '$CONTEXT_JSON'"
   [ "$status" -eq 0 ]
 
-  run bash -lc "python3 - <<'PY'
+  run bash -lc "python - <<'PY'
 import json
 f='${CONTEXT_JSON}'
 d=json.load(open(f,"r",encoding="utf-8"))

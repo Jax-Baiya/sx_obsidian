@@ -52,6 +52,7 @@ def test_danger_reset_preview_and_apply(tmp_path: Path):
 
     settings = Settings(
         SX_DB_PATH=db_path,
+        SX_DB_BACKEND_MODE='SQLITE',
         SX_DB_ENABLE_FTS=False,
         SX_API_CORS_ALLOW_ALL=False,
         DATA_DIR=str(tmp_path),
@@ -64,7 +65,7 @@ def test_danger_reset_preview_and_apply(tmp_path: Path):
 
     # Preview: tag filter matches v1 only.
     resp = client.post(
-        '/danger/reset',
+        '/danger/reset?source_id=default',
         json={
             'apply': False,
             'confirm': '',
@@ -84,7 +85,7 @@ def test_danger_reset_preview_and_apply(tmp_path: Path):
 
     # Apply without confirmation should fail.
     resp2 = client.post(
-        '/danger/reset',
+        '/danger/reset?source_id=default',
         json={
             'apply': True,
             'confirm': '',
@@ -98,7 +99,7 @@ def test_danger_reset_preview_and_apply(tmp_path: Path):
 
     # Apply with confirmation.
     resp3 = client.post(
-        '/danger/reset',
+        '/danger/reset?source_id=default',
         json={
             'apply': True,
             'confirm': 'RESET',
@@ -128,6 +129,7 @@ def test_danger_reset_filter_has_notes(tmp_path: Path, has_notes: bool, expected
 
     settings = Settings(
         SX_DB_PATH=db_path,
+        SX_DB_BACKEND_MODE='SQLITE',
         SX_DB_ENABLE_FTS=False,
         SX_API_CORS_ALLOW_ALL=False,
         DATA_DIR=str(tmp_path),
@@ -139,7 +141,7 @@ def test_danger_reset_filter_has_notes(tmp_path: Path, has_notes: bool, expected
     client = TestClient(app)
 
     resp = client.post(
-        '/danger/reset',
+        '/danger/reset?source_id=default',
         json={
             'apply': False,
             'filters': {'has_notes': has_notes},

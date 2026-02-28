@@ -81,3 +81,7 @@ exports/*.jsonl.gz
 # Temporary local utility scripts
 tools/*_tmp.py
 
+# User-created local scripts (keep repository-owned scripts tracked)
+scripts/user/
+scripts/*.local.sh
+

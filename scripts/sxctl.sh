@@ -341,18 +341,18 @@ pick_with_arrows() {
     if [[ "$key" == $'\x1b' ]]; then
       read -rsn2 key </dev/tty || true
       case "$key" in
-        "[A") selected=$(( selected > 0 ? selected - 1 : max )) ;;
-        "[B") selected=$(( selected < max ? selected + 1 : 0 )) ;;
+        "[A") selected=$((selected > 0 ? selected - 1 : max)) ;;
+        "[B") selected=$((selected < max ? selected + 1 : 0)) ;;
       esac
       continue
     fi
 
     case "$key" in
-      ''|$'\n'|$'\r')
+      '' | $'\n' | $'\r')
         printf "%s" "${options[$selected]}"
         return 0
         ;;
-      q|Q)
+      q | Q)
         return 1
         ;;
       [0-9])
@@ -546,7 +546,10 @@ browse_directories() {
     local picked
     picked="$(pick_with_ui "Browse filesystem" "${options[@]}")" || return 1
     case "$picked" in
-      "Select current: "*) printf '%s' "${picked#Select current: }"; return 0 ;;
+      "Select current: "*)
+        printf '%s' "${picked#Select current: }"
+        return 0
+        ;;
       "Go parent directory") current="$(dirname "$current")" ;;
       "Go home (~)") current="${HOME:-/}" ;;
       "Go root (/)") current="/" ;;
@@ -831,7 +834,7 @@ alias_to_mode() {
   local alias="${1:-}"
   case "$alias" in
     SUPABASE_SESSION_*) printf "SESSION" ;;
-    SUPABASE_TRANS_*|SUPABASE_TRANSACTION_*) printf "TRANSACTION" ;;
+    SUPABASE_TRANS_* | SUPABASE_TRANSACTION_*) printf "TRANSACTION" ;;
     *) printf "LOCAL" ;;
   esac
 }
@@ -856,7 +859,7 @@ select_db_backend() {
   fi
 
   case "$backend" in
-    sqlite|SQLITE)
+    sqlite | SQLITE)
       SXCTL_DB_BACKEND="sqlite"
       SXCTL_DB_PATH="$SX_PA_DB_PATH"
       SXCTL_PIPELINE_DB_PROFILE=""
@@ -865,7 +868,7 @@ select_db_backend() {
       SXCTL_SCHEMA_NAME=""
       SXCTL_SEARCH_PATH=""
       ;;
-    postgres_primary|POSTGRES_PRIMARY)
+    postgres_primary | POSTGRES_PRIMARY)
       SXCTL_DB_BACKEND="postgres_primary"
       local aliases=()
       [ -n "${SX_PA_PIPELINE_DB_LOCAL_PROFILE:-}" ] && aliases+=("${SX_PA_PIPELINE_DB_LOCAL_PROFILE}")
@@ -896,7 +899,7 @@ select_db_backend() {
       SXCTL_SCHEMA_NAME="${schema_prefix}_${source_norm}"
       SXCTL_SEARCH_PATH="${SXCTL_SCHEMA_NAME},public"
       ;;
-    postgres|POSTGRES)
+    postgres | POSTGRES)
       SXCTL_DB_BACKEND="postgres"
       local aliases=()
       [ -n "${SX_PA_PIPELINE_DB_LOCAL_PROFILE:-}" ] && aliases+=("${SX_PA_PIPELINE_DB_LOCAL_PROFILE}")
@@ -1268,7 +1271,7 @@ menu_loop() {
       7)
         diagnostics
         ;;
-      8|q|Q|"")
+      8 | q | Q | "")
         say "${C_CYAN}Goodbye.${C_RST}"
         break
         ;;
@@ -1316,7 +1319,7 @@ ensure_dirs
 history_prune_file
 
 case "$cmd" in
-  -h|--help|help)
+  -h | --help | help)
     help
     ;;
 
@@ -1328,7 +1331,7 @@ case "$cmd" in
     sub="${1:-show}"
     shift || true
     case "$sub" in
-      init|set|change)
+      init | set | change)
         if ! configure_context; then
           die "Context setup cancelled"
         fi

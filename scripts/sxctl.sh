@@ -52,10 +52,10 @@ fi
 UI_HR='='
 UI_BOX_V='|'
 
-say()   { printf "%b\n" "$*"; }
-warn()  { printf "%b\n" "${C_YEL}! $*${C_RST}" >&2; }
-err()   { printf "%b\n" "${C_RED}✗ $*${C_RST}" >&2; }
-ok()    { printf "%b\n" "${C_GRN}✓ $*${C_RST}"; }
+say() { printf "%b\n" "$*"; }
+warn() { printf "%b\n" "${C_YEL}! $*${C_RST}" >&2; }
+err() { printf "%b\n" "${C_RED}✗ $*${C_RST}" >&2; }
+ok() { printf "%b\n" "${C_GRN}✓ $*${C_RST}"; }
 debug() {
   if [ "$SXCTL_DEBUG" = "1" ] || [ "$SXCTL_VERBOSE" = "1" ]; then
     printf "%b\n" "${C_DIM}[debug] $*${C_RST}" >&2
@@ -79,21 +79,22 @@ _hr() {
 banner() {
   local title="$1" subtitle="${2:-}"
   local w=62
-  local bar; bar="$(_hr "$UI_HR" $w)"
+  local bar
+  bar="$(_hr "$UI_HR" $w)"
   say_err ""
   say_err "${C_CYAN}${bar}${C_RST}"
-  local pad=$(( (w - ${#title}) / 2 ))
+  local pad=$(((w - ${#title}) / 2))
   printf '%b' "${C_CYAN}${UI_BOX_V}${C_RST} " >&2
   printf '%*s' "$pad" '' >&2
   printf '%b' "${C_BOLD}${C_MAG}${title}${C_RST}" >&2
-  printf '%*s' $(( w - pad - ${#title} - 1 )) '' >&2
+  printf '%*s' $((w - pad - ${#title} - 1)) '' >&2
   printf '%b\n' "${C_CYAN}${UI_BOX_V}${C_RST}" >&2
   if [ -n "$subtitle" ]; then
-    local spad=$(( (w - ${#subtitle}) / 2 ))
+    local spad=$(((w - ${#subtitle}) / 2))
     printf '%b' "${C_CYAN}${UI_BOX_V}${C_RST} " >&2
     printf '%*s' "$spad" '' >&2
     printf '%b' "${C_DIM}${C_WHT}${subtitle}${C_RST}" >&2
-    printf '%*s' $(( w - spad - ${#subtitle} - 1 )) '' >&2
+    printf '%*s' $((w - spad - ${#subtitle} - 1)) '' >&2
     printf '%b\n' "${C_CYAN}${UI_BOX_V}${C_RST}" >&2
   fi
   say_err "${C_CYAN}${bar}${C_RST}"
@@ -314,7 +315,7 @@ pick_with_arrows() {
 
   local selected=0 key max
   local printed_lines=0
-  max=$(( ${#options[@]} - 1 ))
+  max=$((${#options[@]} - 1))
 
   tput civis >/dev/null 2>&1 || true
   trap 'tput cnorm >/dev/null 2>&1 || true' RETURN
@@ -323,7 +324,7 @@ pick_with_arrows() {
     if [ "$printed_lines" -gt 0 ]; then
       printf '\033[%sA' "$printed_lines" >&2
     fi
-    printed_lines=$(( ${#options[@]} + 2 ))
+    printed_lines=$((${#options[@]} + 2))
 
     printf "\r\033[2K%b\n" "${C_BOLD}${C_CYAN}  ${prompt}${C_RST}" >&2
     printf "\r\033[2K%b\n" "${C_DIM}  $(_hr '-' 56)${C_RST}" >&2

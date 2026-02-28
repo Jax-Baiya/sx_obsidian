@@ -1186,7 +1186,11 @@ verify_run() {
 
 ensure_venv() {
   if [ ! -x "./.venv/bin/python" ]; then
-    die "Missing .venv. Run: ./scripts/bootstrap.sh (or make -f scripts/Makefile bootstrap)"
+    warn "Missing .venv; bootstrapping via ./scripts/deploy.sh..."
+    ./scripts/deploy.sh
+  fi
+  if [ ! -x "./.venv/bin/python" ]; then
+    die "Missing .venv after bootstrap. Run: ./scripts/bootstrap.sh (or make -f scripts/Makefile bootstrap)"
   fi
 }
 

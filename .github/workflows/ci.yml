@@ -19,6 +19,17 @@ jobs:
           python-version: "3.10"
           cache: "pip"
 
+      - name: Verify Python
+        run: |
+          python --version || true
+          python3 --version || true
+          which python || true
+          which python3 || true
+
+      - name: Deploy (with dev deps)
+        run: |
+          ./scripts/deploy.sh --dev
+
       - name: Install shell test tooling
         run: |
           sudo apt-get update
@@ -39,10 +50,6 @@ jobs:
       - name: Run bats tests
         run: |
           bats tests/shell/*.bats
-
-      - name: Deploy (with dev deps)
-        run: |
-          ./scripts/deploy.sh --dev
 
       - name: Run tests
         run: |

@@ -29,8 +29,8 @@ print_venv_diagnostics() {
 }
 
 if [ ! -d "$VENV_DIR" ]; then
-    echo "Error: Virtual environment not found. Please run ./scripts/deploy.sh first."
-    exit 1
+    echo "Virtual environment not found; bootstrapping via ./scripts/deploy.sh..." >&2
+    ./scripts/deploy.sh
 fi
 
 # Prefer python3, fall back to python.

@@ -22,13 +22,13 @@ done
 # 1. Environment Check
 PYTHON_BIN=""
 if command -v python &> /dev/null; then
-    PYTHON_BIN="python"
+  PYTHON_BIN="python"
 elif command -v python3 &> /dev/null; then
-    PYTHON_BIN="python3"
+  PYTHON_BIN="python3"
 else
-    echo "Error: Python is not installed or not on PATH." >&2
-    echo "In GitHub Actions, ensure actions/setup-python ran successfully." >&2
-    exit 1
+  echo "Error: Python is not installed or not on PATH." >&2
+  echo "In GitHub Actions, ensure actions/setup-python ran successfully." >&2
+  exit 1
 fi
 
 # 2. Windows Metadata Cleanup (Optional but recommended for WSL)

@@ -20,7 +20,7 @@ print_venv_diagnostics() {
         if [ -f "$VENV_DIR/pyvenv.cfg" ]; then
             printf '\n%s\n' "$VENV_DIR/pyvenv.cfg:" >&2
             sed -n '1,120p' "$VENV_DIR/pyvenv.cfg" >&2 || true
-        fi
+    fi
     else
         echo "(missing) $VENV_DIR" >&2
     fi
